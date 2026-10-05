@@ -69,33 +69,33 @@ namespace
 }
 
 //==============================================================================
-MappingSummaryRow::MappingSummaryRow (BridgeEngine& engineToUse, juce::String mappingIdToUse,
-                                       std::function<void (const juce::String&)> onSelectedIn)
-    : engine (engineToUse), mappingId (std::move (mappingIdToUse)), onSelected (std::move (onSelectedIn))
+InputSummaryRow::InputSummaryRow (BridgeEngine& engineToUse, juce::String inputIdToUse,
+                                  std::function<void (const juce::String&)> onSelectedIn)
+    : engine (engineToUse), inputId (std::move (inputIdToUse)), onSelected (std::move (onSelectedIn))
 {
-    addAndMakeVisible (addressLabel);
+    addAndMakeVisible (nameLabel);
     addAndMakeVisible (valueLabel);
 
     valueLabel.setJustificationType (juce::Justification::centredRight);
     valueLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
 
-    for (auto* l : { &addressLabel, &valueLabel })
+    for (auto* l : { &nameLabel, &valueLabel })
         l->setInterceptsMouseClicks (false, false);
 
     refresh();
 }
 
-void MappingSummaryRow::refresh()
+void InputSummaryRow::refresh()
 {
-    auto* m = engine.findMappingById (mappingId);
-    if (m == nullptr)
+    auto* input = engine.findInputById (inputId);
+    if (input == nullptr)
         return;
 
-    addressLabel.setText (m->inputAddress, juce::dontSendNotification);
-    valueLabel.setText (m->hasLiveValue ? juce::String (m->liveValue, 3) : "--", juce::dontSendNotification);
+    nameLabel.setText (input->getDisplayName(), juce::dontSendNotification);
+    valueLabel.setText (input->hasLiveValue ? juce::String (input->liveValue, 3) : "--", juce::dontSendNotification);
 }
 
-void MappingSummaryRow::setSelected (bool shouldBeSelected)
+void InputSummaryRow::setSelected (bool shouldBeSelected)
 {
     if (selected != shouldBeSelected)
     {
@@ -104,25 +104,25 @@ void MappingSummaryRow::setSelected (bool shouldBeSelected)
     }
 }
 
-void MappingSummaryRow::mouseDown (const juce::MouseEvent&)
+void InputSummaryRow::mouseDown (const juce::MouseEvent&)
 {
     if (onSelected)
-        onSelected (mappingId);
+        onSelected (inputId);
 }
 
-void MappingSummaryRow::mouseEnter (const juce::MouseEvent&)
+void InputSummaryRow::mouseEnter (const juce::MouseEvent&)
 {
     hovered = true;
     repaint();
 }
 
-void MappingSummaryRow::mouseExit (const juce::MouseEvent&)
+void InputSummaryRow::mouseExit (const juce::MouseEvent&)
 {
     hovered = false;
     repaint();
 }
 
-void MappingSummaryRow::paint (juce::Graphics& g)
+void InputSummaryRow::paint (juce::Graphics& g)
 {
     if (selected)
     {
@@ -136,60 +136,72 @@ void MappingSummaryRow::paint (juce::Graphics& g)
     }
 }
 
-void MappingSummaryRow::resized()
+void InputSummaryRow::resized()
 {
     auto area = getLocalBounds().reduced (6, 0);
     valueLabel.setBounds (area.removeFromRight (valueColumnWidth));
     area.removeFromRight (columnGap);
-    addressLabel.setBounds (area);
+    nameLabel.setBounds (area);
 }
 
 //==============================================================================
-MappingListComponent::MappingListComponent (BridgeEngine& engineToUse)
+InputListComponent::InputListComponent (BridgeEngine& engineToUse)
     : engine (engineToUse)
 {
     rebuild();
 }
 
-void MappingListComponent::rebuild()
+void InputListComponent::setShowScalers (bool shouldShowScalers)
+{
+    showScalers = shouldShowScalers;
+    rebuild();
+}
+
+void InputListComponent::rebuild()
 {
     rows.clear();
 
-    for (auto& m : engine.getMappings())
+    auto addRow = [this] (const InputChannel& input)
     {
-        auto* row = rows.add (new MappingSummaryRow (engine, m.id, [this] (const juce::String& id)
+        addAndMakeVisible (rows.add (new InputSummaryRow (engine, input.id, [this] (const juce::String& id)
         {
             selectedId = id;
             updateSelectionHighlight();
             if (onSelectionChanged)
                 onSelectionChanged (id);
-        }));
-        addAndMakeVisible (row);
-    }
+        })));
+    };
+
+    if (showScalers)
+        for (auto& s : engine.getScalers())
+            addRow (s);
+    else
+        for (auto& m : engine.getMappings())
+            addRow (m);
 
     updateSelectionHighlight();
     resized();
 }
 
-void MappingListComponent::refreshRows()
+void InputListComponent::refreshRows()
 {
     for (auto* row : rows)
         row->refresh();
 }
 
-void MappingListComponent::setSelectedId (const juce::String& id)
+void InputListComponent::setSelectedId (const juce::String& id)
 {
     selectedId = id;
     updateSelectionHighlight();
 }
 
-void MappingListComponent::updateSelectionHighlight()
+void InputListComponent::updateSelectionHighlight()
 {
     for (auto* row : rows)
-        row->setSelected (row->getMappingId() == selectedId);
+        row->setSelected (row->getInputId() == selectedId);
 }
 
-void MappingListComponent::resized()
+void InputListComponent::resized()
 {
     const int width = getWidth();
     const int rowHeight = 28;
@@ -205,32 +217,101 @@ void MappingListComponent::resized()
 }
 
 //==============================================================================
+DisclosureButton::DisclosureButton (const juce::String& text)
+    : juce::Button (text)
+{
+    setClickingTogglesState (true);
+}
+
+void DisclosureButton::setOpen (bool shouldBeOpen)
+{
+    setToggleState (shouldBeOpen, juce::dontSendNotification);
+    angle = getTargetAngle();
+    repaint();
+}
+
+float DisclosureButton::getTargetAngle() const
+{
+    return getToggleState() ? juce::MathConstants<float>::halfPi : 0.0f;
+}
+
+void DisclosureButton::clicked()
+{
+    startTimerHz (60);
+}
+
+void DisclosureButton::timerCallback()
+{
+    const float target = getTargetAngle();
+    angle += (target - angle) * 0.35f;
+
+    if (std::abs (target - angle) < 0.01f)
+    {
+        angle = target;
+        stopTimer();
+    }
+
+    repaint();
+}
+
+void DisclosureButton::paintButton (juce::Graphics& g, bool isHighlighted, bool)
+{
+    auto area = getLocalBounds().toFloat();
+    const auto colour = isHighlighted ? juce::Colours::lightgrey : juce::Colours::grey;
+
+    // A right-pointing triangle centred on the origin, rotated into place.
+    const auto arrowCentre = area.removeFromLeft (12.0f).getCentre();
+    juce::Path arrow;
+    arrow.addTriangle (-2.5f, -4.0f, -2.5f, 4.0f, 4.0f, 0.0f);
+    arrow.applyTransform (juce::AffineTransform::rotation (angle).translated (arrowCentre));
+
+    g.setColour (colour);
+    g.fillPath (arrow);
+
+    area.removeFromLeft (4.0f);
+    g.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
+    g.drawText (getButtonText(), area, juce::Justification::centredLeft);
+}
+
+//==============================================================================
 MainComponent::MainComponent()
 {
     setWantsKeyboardFocus (true);
     juce::MenuBarModel::setMacMainMenu (&menuModel);
 
-    addAndMakeVisible (settingsComponent);
+    const auto tabColour = findColour (juce::ResizableWindow::backgroundColourId);
+    tabs.addTab ("Mappings", tabColour, -1);
+    tabs.addTab ("Scalers", tabColour, -1);
+    tabs.addTab ("Settings", tabColour, -1);
+    tabs.setCurrentTabIndex (mappingsPage, false);
+    tabs.addChangeListener (this);
+    addAndMakeVisible (tabs);
 
-    addAndMakeVisible (listHeaderAddress);
+    addChildComponent (settingsViewport);
+    settingsViewport.setViewedComponent (&settingsComponent, false);
+    settingsViewport.setScrollBarsShown (true, false);
+    settingsComponent.onPreferredHeightChanged = [this] { resized(); };
+
+    addAndMakeVisible (listHeaderName);
     addAndMakeVisible (listHeaderValue);
-    for (auto* l : { &listHeaderAddress, &listHeaderValue })
+    for (auto* l : { &listHeaderName, &listHeaderValue })
     {
         l->setFont (juce::Font (juce::FontOptions (12.0f, juce::Font::bold)));
         l->setColour (juce::Label::textColourId, juce::Colours::grey);
     }
     listHeaderValue.setJustificationType (juce::Justification::centredRight);
 
-    addAndMakeVisible (mappingsViewport);
-    mappingsViewport.setViewedComponent (&mappingsList, false);
-    mappingsList.setSize (300, 10);
-    mappingsList.onSelectionChanged = [this] (const juce::String& id) { selectMapping (id); };
+    addAndMakeVisible (listViewport);
+    listViewport.setViewedComponent (&inputList, false);
+    inputList.setSize (300, 10);
+    inputList.onSelectionChanged = [this] (const juce::String& id) { selectInput (id); };
 
-    addAndMakeVisible (addMappingButton);
-    addMappingButton.onClick = [this]
+    addAndMakeVisible (addButton);
+    addButton.onClick = [this]
     {
-        auto newId = engine.addMapping();
-        selectedMappingId = newId;
+        // The inspector rebuild this triggers is async, so it picks up the new selection.
+        currentSelection() = getCurrentPage() == scalersPage ? engine.addScaler() : engine.addMapping();
+        inputList.setSelectedId (currentSelection());
     };
 
     addAndMakeVisible (inspectorViewport);
@@ -240,15 +321,16 @@ MainComponent::MainComponent()
 
     engine.onProjectChanged = [this] { handleProjectChanged(); };
     engine.onLogMessage = [this] (const juce::String& text) { appendLog (text); };
+    engine.onMidiDevicesChanged = [this] { handleProjectChanged(); };
 
-    addAndMakeVisible (logLabel);
     addAndMakeVisible (logToggleButton);
     addAndMakeVisible (logClearButton);
+    logToggleButton.setOpen (logVisible);
     logToggleButton.onClick = [this]
     {
-        logVisible = ! logVisible;
-        logToggleButton.setButtonText (logVisible ? "Hide" : "Show");
+        logVisible = logToggleButton.getToggleState();
         logBox.setVisible (logVisible);
+        logClearButton.setVisible (logVisible);
         resized();
         repaint();
     };
@@ -261,10 +343,10 @@ MainComponent::MainComponent()
     logBox.setFont (juce::Font (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 13.0f, juce::Font::plain)));
     addAndMakeVisible (logBox);
 
-    rebuildInspector();
+    setSize (1060, 820);
+    showPage (mappingsPage);
     updateTitle();
 
-    setSize (860, 820);
     startTimerHz (10);
     grabKeyboardFocus();
 }
@@ -272,38 +354,78 @@ MainComponent::MainComponent()
 MainComponent::~MainComponent()
 {
     juce::MenuBarModel::setMacMainMenu (nullptr);
+    tabs.removeChangeListener (this);
     engine.onProjectChanged = nullptr;
     engine.onLogMessage = nullptr;
+    engine.onMidiDevicesChanged = nullptr;
 }
 
 void MainComponent::timerCallback()
 {
-    mappingsList.refreshRows();
+    inputList.refreshRows();
     if (inspector != nullptr)
+        inspector->refreshLiveDisplay();
+}
+
+void MainComponent::changeListenerCallback (juce::ChangeBroadcaster*)
+{
+    showPage (getCurrentPage());
+}
+
+void MainComponent::showPage (Page page)
+{
+    const bool isSettings = page == settingsPage;
+
+    settingsViewport.setVisible (isSettings);
+    for (auto* c : std::initializer_list<juce::Component*> { &listViewport, &listHeaderName, &listHeaderValue,
+                                                              &addButton, &inspectorViewport })
+        c->setVisible (! isSettings);
+
+    if (! isSettings)
     {
-        inspector->refreshCurrentValueLabel();
-        inspector->refreshOutputWarnings();
+        const bool scalers = page == scalersPage;
+        addButton.setButtonText (scalers ? "+ Add Scaler" : "+ Add Mapping");
+        inspectorPlaceholder.setText (scalers ? "Select a scaler on the left to edit its details."
+                                              : "Select a mapping on the left to edit its details.",
+                                      juce::dontSendNotification);
+        inputList.setShowScalers (scalers);
+        inputList.setSelectedId (currentSelection());
     }
+
+    rebuildInspector();
+    repaint();
 }
 
 void MainComponent::handleProjectChanged()
 {
-    mappingsList.rebuild();
+    inputList.rebuild();
 
     if (selectedMappingId.isNotEmpty() && engine.findMappingById (selectedMappingId) == nullptr)
         selectedMappingId.clear();
+    if (selectedScalerId.isNotEmpty() && engine.findScalerById (selectedScalerId) == nullptr)
+        selectedScalerId.clear();
 
-    mappingsList.setSelectedId (selectedMappingId);
-    rebuildInspector();
+    // This often runs from inside one of the inspector's own callbacks, so
+    // it must never be deleted here: edits refresh it in place, and
+    // anything that changes its shape rebuilds it asynchronously.
+    if (getCurrentPage() != settingsPage)
+    {
+        inputList.setSelectedId (currentSelection());
+
+        if (inspector != nullptr && inspector->getInputId() == currentSelection() && inspector->canRefreshInPlace())
+            inspector->refreshFromEngine();
+        else
+            triggerAsyncUpdate();
+    }
 
     settingsComponent.refreshFromEngine();
     updateTitle();
     menuModel.menuItemsChanged();
 }
 
-void MainComponent::handleFieldsChanged()
+void MainComponent::handleAsyncUpdate()
 {
-    mappingsList.refreshRows();
+    rebuildInspector();
 }
 
 void MainComponent::updateTitle()
@@ -398,9 +520,10 @@ bool MainComponent::keyPressed (const juce::KeyPress& key)
     return false;
 }
 
-void MainComponent::selectMapping (const juce::String& id)
+
+void MainComponent::selectInput (const juce::String& id)
 {
-    selectedMappingId = id;
+    currentSelection() = id;
     rebuildInspector();
 }
 
@@ -408,18 +531,25 @@ void MainComponent::rebuildInspector()
 {
     inspector.reset();
 
-    if (selectedMappingId.isNotEmpty() && engine.findMappingById (selectedMappingId) != nullptr)
+    const auto page = getCurrentPage();
+    const bool isScaler = page == scalersPage;
+    const auto& id = currentSelection();
+    const bool exists = isScaler ? engine.findScalerById (id) != nullptr : engine.findMappingById (id) != nullptr;
+
+    // Learning is tied to the input being edited - moving away cancels it.
+    if (engine.getMidiLearnInputId().isNotEmpty() && (page == settingsPage || engine.getMidiLearnInputId() != id))
+        engine.cancelMidiLearn();
+
+    if (page != settingsPage && id.isNotEmpty() && exists)
     {
-        inspector = std::make_unique<MappingInspectorComponent> (engine, selectedMappingId,
-            [this] { handleProjectChanged(); },
-            [this] { handleFieldsChanged(); });
+        inspector = std::make_unique<MappingInspectorComponent> (engine, id, isScaler);
         inspectorViewport.setViewedComponent (inspector.get(), false);
         inspectorPlaceholder.setVisible (false);
     }
     else
     {
         inspectorViewport.setViewedComponent (nullptr, false);
-        inspectorPlaceholder.setVisible (true);
+        inspectorPlaceholder.setVisible (page != settingsPage);
     }
 
     resized();
@@ -450,10 +580,27 @@ void MainComponent::paint (juce::Graphics& g)
 {
     g.fillAll (findColour (juce::ResizableWindow::backgroundColourId));
 
-    drawSection (g, settingsBounds, "Global Settings");
-    drawSection (g, mappingsBounds, "Mappings");
-    drawSection (g, inspectorBounds, "Mapping Details");
-    drawSection (g, logBounds, "Activity Log");
+    switch (getCurrentPage())
+    {
+        case settingsPage:
+            drawSection (g, settingsBounds, "Global Settings");
+            break;
+        case scalersPage:
+            drawSection (g, listBounds, "Scalers");
+            drawSection (g, inspectorBounds, "Scaler Details");
+            break;
+        case mappingsPage:
+            drawSection (g, listBounds, "Mappings");
+            drawSection (g, inspectorBounds, "Mapping Details");
+            break;
+    }
+
+    // The log's title is its disclosure button, so only the outline is drawn.
+    if (logVisible)
+    {
+        g.setColour (findColour (juce::ResizableWindow::backgroundColourId).contrasting (0.18f).withAlpha (0.6f));
+        g.drawRoundedRectangle (logBounds.withTrimmedTop (20).toFloat(), 6.0f, 1.2f);
+    }
 }
 
 void MainComponent::resized()
@@ -461,61 +608,56 @@ void MainComponent::resized()
     auto area = getLocalBounds().reduced (10);
     const int sectionGap = 10;
 
-    settingsBounds = area.removeFromTop (20 + 20 + GlobalSettingsComponent::getPreferredHeight());
+    tabs.setBounds (area.removeFromTop (30));
     area.removeFromTop (sectionGap);
 
-    const int logChromeHeight = 20 /* title */ + 20 /* reduced top+bottom */ + 24 /* header row */;
-    const int logHeight = logVisible ? 190 : logChromeHeight;
-    logBounds = area.removeFromBottom (logHeight);
+    logBounds = area.removeFromBottom (logVisible ? 170 : 20);
     area.removeFromBottom (sectionGap);
 
     {
+        auto content = logBounds;
+        auto title = content.removeFromTop (20);
+        logToggleButton.setBounds (title.removeFromLeft (120));
+        logClearButton.setBounds (title.removeFromRight (56));
+        logBox.setBounds (content.reduced (10));
+    }
+
+    // Both layouts are computed every time; showPage() decides what's visible.
+    {
+        settingsBounds = area;
         auto content = settingsBounds;
         content.removeFromTop (20);
         content = content.reduced (10);
-        settingsComponent.setBounds (content);
+
+        settingsViewport.setBounds (content);
+        settingsComponent.setSize (content.getWidth() - settingsViewport.getScrollBarThickness(),
+                                   settingsComponent.getPreferredHeight());
     }
 
-    {
-        auto content = logBounds;
-        content.removeFromTop (20);
-        content = content.reduced (10);
-
-        auto header = content.removeFromTop (24);
-        logLabel.setBounds (header.removeFromLeft (150));
-        logClearButton.setBounds (header.removeFromRight (60));
-        header.removeFromRight (6);
-        logToggleButton.setBounds (header.removeFromRight (60));
-
-        content.removeFromTop (6);
-        logBox.setBounds (logVisible ? content : juce::Rectangle<int>());
-    }
-
-    const int mappingsWidth = 340;
-    mappingsBounds = area.removeFromLeft (mappingsWidth);
+    const int listWidth = 340;
+    listBounds = area.removeFromLeft (listWidth);
     area.removeFromLeft (sectionGap);
     inspectorBounds = area;
 
     {
-        auto content = mappingsBounds;
+        auto content = listBounds;
         content.removeFromTop (20);
         content = content.reduced (10);
 
         auto addButtonArea = content.removeFromBottom (30);
-        addMappingButton.setBounds (addButtonArea.removeFromLeft (150));
+        addButton.setBounds (addButtonArea.removeFromLeft (150));
         content.removeFromBottom (6);
 
         auto header = content.removeFromTop (18);
         auto headerInset = header.reduced (6, 0);
         listHeaderValue.setBounds (headerInset.removeFromRight (valueColumnWidth));
         headerInset.removeFromRight (columnGap);
-        listHeaderAddress.setBounds (headerInset);
+        listHeaderName.setBounds (headerInset);
 
         content.removeFromTop (4);
-        mappingsViewport.setBounds (content);
-        mappingsList.setSize (mappingsViewport.getWidth() - mappingsViewport.getScrollBarThickness(),
-                               mappingsList.getHeight());
-        mappingsList.resized();
+        listViewport.setBounds (content);
+        inputList.setSize (listViewport.getWidth() - listViewport.getScrollBarThickness(), inputList.getHeight());
+        inputList.resized();
     }
 
     {

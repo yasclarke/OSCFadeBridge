@@ -5,14 +5,14 @@
 #include "GlobalSettingsComponent.h"
 #include "MappingInspectorComponent.h"
 
-// One compact, single-line summary row in the mapping list: input
-// address (doubles as the mapping's name) and its current live value.
+// One compact, single-line summary row in the input list: the input's
+// name (its address or MIDI message) and its current live value.
 // Click to select for editing in the inspector pane.
-class MappingSummaryRow : public juce::Component
+class InputSummaryRow : public juce::Component
 {
 public:
-    MappingSummaryRow (BridgeEngine& engineToUse, juce::String mappingIdToUse,
-                        std::function<void (const juce::String&)> onSelected);
+    InputSummaryRow (BridgeEngine& engineToUse, juce::String inputIdToUse,
+                     std::function<void (const juce::String&)> onSelected);
 
     void paint (juce::Graphics& g) override;
     void resized() override;
@@ -20,29 +20,30 @@ public:
     void mouseEnter (const juce::MouseEvent&) override;
     void mouseExit (const juce::MouseEvent&) override;
 
-    const juce::String& getMappingId() const { return mappingId; }
+    const juce::String& getInputId() const { return inputId; }
     void setSelected (bool shouldBeSelected);
     void refresh();
 
 private:
     BridgeEngine& engine;
-    juce::String mappingId;
+    juce::String inputId;
     std::function<void (const juce::String&)> onSelected;
 
-    juce::Label addressLabel;
+    juce::Label nameLabel;
     juce::Label valueLabel;
 
     bool selected = false;
     bool hovered = false;
 };
 
-// The master list: a header row plus a scrollable stack of
-// MappingSummaryRow, tracking which mapping (if any) is selected.
-class MappingListComponent : public juce::Component
+// The master list: a scrollable stack of InputSummaryRow showing either
+// the mappings or the scalers, tracking which one (if any) is selected.
+class InputListComponent : public juce::Component
 {
 public:
-    explicit MappingListComponent (BridgeEngine& engineToUse);
+    explicit InputListComponent (BridgeEngine& engineToUse);
 
+    void setShowScalers (bool shouldShowScalers);
     void rebuild();
     void resized() override;
     void refreshRows();
@@ -54,8 +55,29 @@ private:
     void updateSelectionHighlight();
 
     BridgeEngine& engine;
+    bool showScalers = false;
     juce::String selectedId;
-    juce::OwnedArray<MappingSummaryRow> rows;
+    juce::OwnedArray<InputSummaryRow> rows;
+};
+
+// A section title with a small arrow in front of it that rotates from
+// pointing right (closed) to pointing down (open) when clicked.
+class DisclosureButton : public juce::Button, private juce::Timer
+{
+public:
+    explicit DisclosureButton (const juce::String& text);
+
+    // Sets the open state without notifying listeners or animating.
+    void setOpen (bool shouldBeOpen);
+
+    void paintButton (juce::Graphics& g, bool isHighlighted, bool isDown) override;
+
+private:
+    void clicked() override;
+    void timerCallback() override;
+    float getTargetAngle() const;
+
+    float angle = 0.0f;
 };
 
 class MainComponent;
@@ -77,7 +99,10 @@ private:
     MainComponent& owner;
 };
 
-class MainComponent : public juce::Component, private juce::Timer
+class MainComponent : public juce::Component,
+                      private juce::Timer,
+                      private juce::AsyncUpdater,
+                      private juce::ChangeListener
 {
 public:
     MainComponent();
@@ -104,41 +129,51 @@ public:
     bool canRedo() const { return engine.canRedo(); }
 
 private:
+    enum Page { mappingsPage = 0, scalersPage, settingsPage };
+
     void timerCallback() override;
+    void handleAsyncUpdate() override;
+    void changeListenerCallback (juce::ChangeBroadcaster*) override;
+
+    Page getCurrentPage() const { return (Page) tabs.getCurrentTabIndex(); }
+    juce::String& currentSelection() { return getCurrentPage() == scalersPage ? selectedScalerId : selectedMappingId; }
+    void showPage (Page page);
+
     void appendLog (const juce::String& text);
     void handleProjectChanged();
-    void handleFieldsChanged();
-    void selectMapping (const juce::String& id);
+    void selectInput (const juce::String& id);
     void rebuildInspector();
     void drawSection (juce::Graphics& g, juce::Rectangle<int> bounds, const juce::String& title);
     void updateTitle();
 
     BridgeEngine engine;
-    juce::String selectedMappingId;
+    juce::String selectedMappingId, selectedScalerId;
 
     MainMenuModel menuModel { *this };
     std::unique_ptr<juce::FileChooser> fileChooser;
 
+    juce::TabbedButtonBar tabs { juce::TabbedButtonBar::TabsAtTop };
+
+    juce::Viewport settingsViewport;
     GlobalSettingsComponent settingsComponent { engine };
 
-    juce::Viewport mappingsViewport;
-    MappingListComponent mappingsList { engine };
-    juce::Label listHeaderAddress { {}, "Input Address" };
+    juce::Viewport listViewport;
+    InputListComponent inputList { engine };
+    juce::Label listHeaderName { {}, "Input" };
     juce::Label listHeaderValue { {}, "Value" };
-    juce::TextButton addMappingButton { "+ Add Mapping" };
+    juce::TextButton addButton;
 
     juce::Viewport inspectorViewport;
     std::unique_ptr<MappingInspectorComponent> inspector;
-    juce::Label inspectorPlaceholder { {}, "Select a mapping on the left to edit its details." };
+    juce::Label inspectorPlaceholder;
 
-    juce::TextButton logToggleButton { "Hide" };
+    DisclosureButton logToggleButton { "Activity Log" };
     juce::TextButton logClearButton { "Clear" };
-    juce::Label logLabel { {}, "Activity Log" };
     juce::TextEditor logBox;
     bool logVisible = true;
 
     // Section outline rectangles, computed in resized(), painted in paint().
-    juce::Rectangle<int> settingsBounds, mappingsBounds, inspectorBounds, logBounds;
+    juce::Rectangle<int> settingsBounds, listBounds, inspectorBounds, logBounds;
 
     juce::TooltipWindow tooltipWindow { this };
 };

@@ -1,4 +1,5 @@
 #include <juce_gui_basics/juce_gui_basics.h>
+#include "AppLookAndFeel.h"
 #include "MainComponent.h"
 
 class OSCFadeBridgeApplication : public juce::JUCEApplication
@@ -7,17 +8,19 @@ public:
     OSCFadeBridgeApplication() = default;
 
     const juce::String getApplicationName() override { return "OSC Fade Bridge"; }
-    const juce::String getApplicationVersion() override { return "1.0.0"; }
+    const juce::String getApplicationVersion() override { return "1.1.0"; }
     bool moreThanOneInstanceAllowed() override { return false; }
 
     void initialise (const juce::String&) override
     {
+        juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
         mainWindow.reset (new MainWindow (getApplicationName()));
     }
 
     void shutdown() override
     {
         mainWindow = nullptr;
+        juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
     }
 
     void systemRequestedQuit() override
@@ -52,6 +55,7 @@ public:
     };
 
 private:
+    AppLookAndFeel lookAndFeel;
     std::unique_ptr<MainWindow> mainWindow;
 };
 
