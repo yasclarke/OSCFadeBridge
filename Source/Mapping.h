@@ -172,8 +172,6 @@ struct InputChannel
     float inMax = 1.0f;
 
     // Runtime-only state, not persisted.
-    bool hasLastValue = false;   // last value received - the anchor a new fade starts from
-    float lastValue = 0.0f;
     bool hasLiveValue = false;   // the current value (moves during a fade)
     float liveValue = 0.0f;
     int midiMsb = 0;             // last 14-bit CC MSB received
@@ -181,8 +179,6 @@ struct InputChannel
 
     void copyRuntimeStateFrom (const InputChannel& other)
     {
-        hasLastValue = other.hasLastValue;
-        lastValue = other.lastValue;
         hasLiveValue = other.hasLiveValue;
         liveValue = other.liveValue;
         midiMsb = other.midiMsb;

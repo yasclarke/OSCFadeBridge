@@ -69,6 +69,13 @@ namespace
                 }
     }
 
+    // Where a fade is at the given moment.
+    float getFadePosition (const ActiveFade& f, double now)
+    {
+        const double t = f.duration > 0.0 ? juce::jlimit (0.0, 1.0, (now - f.startTime) / f.duration) : 1.0;
+        return f.startValue + (float) t * (f.targetValue - f.startValue);
+    }
+
     juce::StringArray deviceNames (const juce::Array<juce::MidiDeviceInfo>& devices)
     {
         juce::StringArray names;
@@ -738,9 +745,14 @@ std::optional<float> BridgeEngine::decodeMidiValue (InputChannel& input, const j
 
 bool BridgeEngine::applyInputValue (InputChannel& input, float x, double fadeSeconds)
 {
-    const float start = input.hasLastValue ? input.lastValue : x;
-    input.lastValue = x;
-    input.hasLastValue = true;
+    // Start from wherever the input actually is right now - mid-fade, that's
+    // the fade's current position rather than its target - so a new value
+    // arriving during a fade carries on from there instead of jumping.
+    const double now = juce::Time::getMillisecondCounterHiRes() / 1000.0;
+    float start = input.hasLiveValue ? input.liveValue : x;
+    for (auto& f : activeFades)
+        if (f.inputId == input.id)
+            start = getFadePosition (f, now);
 
     activeFades.erase (std::remove_if (activeFades.begin(), activeFades.end(),
                             [&] (const ActiveFade& f) { return f.inputId == input.id; }),
@@ -756,7 +768,7 @@ bool BridgeEngine::applyInputValue (InputChannel& input, float x, double fadeSec
     f.inputId = input.id;
     f.startValue = start;
     f.targetValue = x;
-    f.startTime = juce::Time::getMillisecondCounterHiRes() / 1000.0;
+    f.startTime = now;
     f.duration = fadeSeconds;
     activeFades.push_back (f);
     return false;
@@ -808,11 +820,8 @@ void BridgeEngine::timerCallback()
             continue;
         }
 
-        double t = it->duration > 0.0 ? (now - it->startTime) / it->duration : 1.0;
-        const bool finished = t >= 1.0;
-        t = juce::jlimit (0.0, 1.0, t);
-
-        setLiveValue (*input, it->startValue + (float) t * (it->targetValue - it->startValue));
+        const bool finished = it->duration <= 0.0 || now - it->startTime >= it->duration;
+        setLiveValue (*input, getFadePosition (*it, now));
 
         if (finished)
         {

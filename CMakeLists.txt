@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(OSCFadeBridge VERSION 1.1.0)
+project(OSCFadeBridge VERSION 1.1.1)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -34,7 +34,7 @@ target_compile_definitions(OSCFadeBridge PRIVATE
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_APPLICATION_NAME_STRING="OSC Fade Bridge"
-    JUCE_APPLICATION_VERSION_STRING="1.1.0"
+    JUCE_APPLICATION_VERSION_STRING="1.1.1"
 )
 
 target_link_libraries(OSCFadeBridge
