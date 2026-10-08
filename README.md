@@ -11,6 +11,7 @@ It listens for OSC messages on custom addresses carrying `[x, y]` — a destinat
 - MIDI inputs and outputs: 7-bit CC, 14-bit CC and pitch bend. MIDI inputs have a per-mapping fade time (0 = follow instantly, e.g. a hardware fader)
 - VCA-style scalers: inputs with no outputs of their own (OSC or MIDI). A mapping scaled by one has its normalised value multiplied by the scaler's, mapped onto a per-mapping range (e.g. 0.9–1 for a gentle trim). Scalers can be named
 - MIDI Learn: listen for the next CC or pitch bend (14-bit CC pairs detected automatically) to set an input's device, channel and message
+- Live values for every input and output, and drag-to-change (or double-click to type) values in the lists for testing
 - Configurable OSC receive port and update rate
 - Undo/redo for every edit
 - Multiple named projects (New / Open / Save / Save As), each with its own mappings and settings. Projects from earlier versions load with their send host/port as a single target

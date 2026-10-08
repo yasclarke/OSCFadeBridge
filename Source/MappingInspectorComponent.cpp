@@ -43,6 +43,22 @@ namespace
         return juce::jlimit (0, type == MidiMessageType::controlChange14Bit ? 31 : 127, number);
     }
 
+    // An outline colour + tooltip on a text field; a transparent colour clears it.
+    void setWarning (juce::TextEditor& editor, juce::Colour colour, const juce::String& tooltip)
+    {
+        if (colour.isTransparent())
+        {
+            editor.removeColour (juce::TextEditor::outlineColourId);
+            editor.removeColour (juce::TextEditor::focusedOutlineColourId);
+        }
+        else
+        {
+            editor.setColour (juce::TextEditor::outlineColourId, colour);
+            editor.setColour (juce::TextEditor::focusedOutlineColourId, colour);
+        }
+        editor.setTooltip (tooltip);
+    }
+
     void styleCaption (juce::Label& label)
     {
         label.setFont (juce::Font (juce::FontOptions (12.0f)));
@@ -61,8 +77,13 @@ OutputRowComponent::OutputRowComponent (BridgeEngine& engineToUse, juce::String 
     numberEditor.setTooltip ("Controller number (MSB controller for 14-bit CC)");
 
     for (auto* c : std::initializer_list<juce::Component*> { &targetBox, &addressEditor, &midiTypeBox, &channelBox,
-                                                              &numberEditor, &minEditor, &maxEditor, &removeButton })
+                                                              &numberEditor, &minEditor, &maxEditor, &valueLabel,
+                                                              &removeButton })
         addAndMakeVisible (c);
+
+    valueLabel.setJustificationType (juce::Justification::centredRight);
+    valueLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
+    valueLabel.setTooltip ("The value this output is currently sending");
 
     targetBox.onChange = [this]
     {
@@ -195,29 +216,55 @@ void OutputRowComponent::refreshFromEngine()
     channelBox.setVisible (isMidi);
     numberEditor.setVisible (isMidi && out->midi.type != MidiMessageType::pitchBend);
 
-    refreshDuplicateWarning();
+    refreshWarnings();
+    refreshValue();
 }
 
-void OutputRowComponent::refreshDuplicateWarning()
+void OutputRowComponent::refreshValue()
 {
+    auto* m = engine.findMappingById (mappingId);
+    auto* out = getOutput();
+    auto* target = out != nullptr ? engine.getSettings().findTarget (out->targetId) : nullptr;
+
+    juce::String text = "--";
+    if (m != nullptr && m->hasLiveValue && target != nullptr)
+    {
+        const float value = engine.getOutputValue (*m, *out);
+        text = target->kind == TargetKind::midi
+                 ? juce::String (juce::roundToInt (juce::jlimit (0.0f, out->midi.maxValue(), value)))
+                 : juce::String (value, 3);
+    }
+
+    valueLabel.setText (text, juce::dontSendNotification);
+}
+
+void OutputRowComponent::refreshWarnings()
+{
+    auto* out = getOutput();
+    if (out == nullptr)
+        return;
+
+    auto* target = engine.getSettings().findTarget (out->targetId);
+    const bool isOsc = target != nullptr && target->kind == TargetKind::osc;
+
+    const auto addressProblem = isOsc ? BridgeEngine::getOscAddressProblem (out->address, true) : juce::String();
     const bool duplicated = engine.isOutputDuplicated (mappingId, outputIndex);
-    const auto warningColour = juce::Colours::orange;
+
+    juce::String tooltip;
+    juce::Colour colour;
+    if (addressProblem.isNotEmpty())
+    {
+        tooltip = "Not a valid OSC address, so nothing is sent: " + addressProblem;
+        colour = juce::Colour (0xffe05a4f);
+    }
+    else if (duplicated)
+    {
+        tooltip = "Another output already sends this to the same target";
+        colour = juce::Colours::orange;
+    }
 
     for (auto* editor : { &addressEditor, &numberEditor })
-    {
-        if (duplicated)
-        {
-            editor->setColour (juce::TextEditor::outlineColourId, warningColour);
-            editor->setColour (juce::TextEditor::focusedOutlineColourId, warningColour);
-            editor->setTooltip ("Another output already sends this to the same target");
-        }
-        else
-        {
-            editor->removeColour (juce::TextEditor::outlineColourId);
-            editor->removeColour (juce::TextEditor::focusedOutlineColourId);
-            editor->setTooltip ({});
-        }
-    }
+        setWarning (*editor, colour, tooltip);
 }
 
 void OutputRowComponent::resized()
@@ -228,6 +275,8 @@ void OutputRowComponent::resized()
     area.removeFromLeft (gap);
 
     removeButton.setBounds (area.removeFromRight (removeWidth));
+    area.removeFromRight (gap);
+    valueLabel.setBounds (area.removeFromRight (valueWidth));
     area.removeFromRight (gap);
     maxEditor.setBounds (area.removeFromRight (rangeWidth));
     area.removeFromRight (gap);
@@ -265,15 +314,16 @@ MappingInspectorComponent::MappingInspectorComponent (BridgeEngine& engineToUse,
              &midiNumberLabel, &midiNumberEditor, &midiFadeLabel, &midiFadeEditor,
              &inRangeLabel, &inMinEditor, &inMaxEditor,
              &scaledByLabel, &scaledByBox, &scaledByHint,
-             &outputsLabel, &outputsTargetHeader, &outputsColumnHeader, &outputsRangeHeader,
+             &outputsLabel, &outputsTargetHeader, &outputsColumnHeader, &outputsRangeHeader, &outputsValueHeader,
              &addOutputButton, &removeButton })
         addAndMakeVisible (c);
 
     for (auto* l : { &nameLabel, &scaleRangeLabel, &sourceLabel, &inputAddressLabel, &midiDeviceLabel, &midiTypeLabel, &midiChannelLabel,
                      &midiNumberLabel, &midiFadeLabel, &inRangeLabel, &scaledByLabel, &scaledByHint,
-                     &outputsTargetHeader, &outputsColumnHeader, &outputsRangeHeader })
+                     &outputsTargetHeader, &outputsColumnHeader, &outputsRangeHeader, &outputsValueHeader })
         styleCaption (*l);
     outputsRangeHeader.setJustificationType (juce::Justification::centredRight);
+    outputsValueHeader.setJustificationType (juce::Justification::centredRight);
 
     outputsLabel.setFont (juce::Font (juce::FontOptions (15.0f, juce::Font::bold)));
 
@@ -289,7 +339,7 @@ MappingInspectorComponent::MappingInspectorComponent (BridgeEngine& engineToUse,
     for (auto* c : std::initializer_list<juce::Component*> { &scaledByLabel, &scaledByBox, &scaledByHint, &outputsLabel,
                                                               &scaleRangeLabel, &scaleMinEditor, &scaleMaxEditor,
                                                               &outputsTargetHeader, &outputsColumnHeader,
-                                                              &outputsRangeHeader, &addOutputButton })
+                                                              &outputsRangeHeader, &outputsValueHeader, &addOutputButton })
         c->setVisible (! isScaler);
 
     sourceBox.onChange = [this]
@@ -572,7 +622,17 @@ void MappingInspectorComponent::refreshLiveDisplay()
     refreshLearnButton();
 
     for (auto* row : outputRows)
-        row->refreshDuplicateWarning();
+    {
+        row->refreshWarnings();
+        row->refreshValue();
+    }
+
+    if (input->source == InputSource::osc)
+    {
+        const auto problem = BridgeEngine::getOscAddressProblem (input->inputAddress, false);
+        setWarning (inputAddressEditor, problem.isEmpty() ? juce::Colour() : juce::Colour (0xffe05a4f),
+                    problem.isEmpty() ? juce::String() : "Not a valid OSC address, so it will never receive anything: " + problem);
+    }
 }
 
 int MappingInspectorComponent::getPreferredHeight() const
@@ -701,6 +761,8 @@ void MappingInspectorComponent::resized()
         outputsTargetHeader.setBounds (row.removeFromLeft (R::targetWidth));
         row.removeFromLeft (R::gap);
         row.removeFromRight (R::removeWidth + R::gap);
+        outputsValueHeader.setBounds (row.removeFromRight (R::valueWidth));
+        row.removeFromRight (R::gap);
         outputsRangeHeader.setBounds (row.removeFromRight (R::rangeWidth * 2 + R::gap));
         row.removeFromRight (R::gap);
         outputsColumnHeader.setBounds (row);

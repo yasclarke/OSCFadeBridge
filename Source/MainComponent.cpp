@@ -69,6 +69,48 @@ namespace
 }
 
 //==============================================================================
+DraggableValueLabel::DraggableValueLabel()
+{
+    setEditable (false, true, false);
+    setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
+    setTooltip ("Drag to change the value (hold Shift for fine control), or double-click to type one");
+    onTextChange = [this]
+    {
+        if (onValueTyped)
+            onValueTyped (getText());
+    };
+}
+
+void DraggableValueLabel::mouseDown (const juce::MouseEvent& e)
+{
+    lastDragPosition = e.position;
+    wasDragged = false;
+
+    if (onPressed)
+        onPressed();
+}
+
+void DraggableValueLabel::mouseDrag (const juce::MouseEvent& e)
+{
+    // Pixels needed to sweep the whole input range.
+    constexpr float fullRangePixels = 200.0f;
+
+    const auto delta = e.position - lastDragPosition;
+    lastDragPosition = e.position;
+    wasDragged = true;
+
+    const float scale = e.mods.isShiftDown() ? 0.1f : 1.0f;
+    if (onDragged)
+        onDragged ((delta.x - delta.y) / fullRangePixels * scale);
+}
+
+void DraggableValueLabel::mouseUp (const juce::MouseEvent&)
+{
+    if (wasDragged && onDragEnded)
+        onDragEnded();
+}
+
+//==============================================================================
 InputSummaryRow::InputSummaryRow (BridgeEngine& engineToUse, juce::String inputIdToUse,
                                   std::function<void (const juce::String&)> onSelectedIn)
     : engine (engineToUse), inputId (std::move (inputIdToUse)), onSelected (std::move (onSelectedIn))
@@ -79,8 +121,39 @@ InputSummaryRow::InputSummaryRow (BridgeEngine& engineToUse, juce::String inputI
     valueLabel.setJustificationType (juce::Justification::centredRight);
     valueLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
 
-    for (auto* l : { &nameLabel, &valueLabel })
-        l->setInterceptsMouseClicks (false, false);
+    nameLabel.setInterceptsMouseClicks (false, false);
+
+    valueLabel.onPressed = [this]
+    {
+        if (auto* input = engine.findInputById (inputId))
+            dragNormalised = input->getNormalisedValue();
+        if (onSelected)
+            onSelected (inputId);
+    };
+
+    valueLabel.onDragged = [this] (float normalisedDelta)
+    {
+        auto* input = engine.findInputById (inputId);
+        if (input == nullptr)
+            return;
+
+        dragNormalised = juce::jlimit (0.0f, 1.0f, dragNormalised + normalisedDelta);
+        engine.setValueManually (inputId, juce::jmap (dragNormalised, input->inMin, input->inMax));
+        refresh();
+    };
+
+    valueLabel.onDragEnded = [this] { engine.logManualValue (inputId); };
+
+    valueLabel.onValueTyped = [this] (const juce::String& text)
+    {
+        // Anything that isn't a number (e.g. the "--" placeholder) is ignored.
+        if (text.trim().containsOnly ("0123456789.-+") && text.trim().containsAnyOf ("0123456789"))
+        {
+            engine.setValueManually (inputId, (float) text.trim().getDoubleValue());
+            engine.logManualValue (inputId);
+        }
+        refresh();
+    };
 
     refresh();
 }
@@ -92,7 +165,10 @@ void InputSummaryRow::refresh()
         return;
 
     nameLabel.setText (input->getDisplayName(), juce::dontSendNotification);
-    valueLabel.setText (input->hasLiveValue ? juce::String (input->liveValue, 3) : "--", juce::dontSendNotification);
+
+    // Setting the text would close the editor of a value being typed.
+    if (! valueLabel.isBeingEdited())
+        valueLabel.setText (input->hasLiveValue ? juce::String (input->liveValue, 3) : "--", juce::dontSendNotification);
 }
 
 void InputSummaryRow::setSelected (bool shouldBeSelected)
@@ -523,6 +599,11 @@ bool MainComponent::keyPressed (const juce::KeyPress& key)
 
 void MainComponent::selectInput (const juce::String& id)
 {
+    // Clicking a row's value to drag it also selects the row - don't
+    // rebuild the inspector if it's already showing that input.
+    if (inspector != nullptr && inspector->getInputId() == id)
+        return;
+
     currentSelection() = id;
     rebuildInspector();
 }

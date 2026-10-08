@@ -68,6 +68,11 @@ public:
     // outputs[outputIndex] of mappingId.
     bool isOutputDuplicated (const juce::String& mappingId, int outputIndex) const;
 
+    // If this isn't a usable OSC address (must start with '/', no spaces or
+    // disallowed characters), a short explanation of why; otherwise empty.
+    // Outputs may use wildcards; inputs are matched literally, so may not.
+    static juce::String getOscAddressProblem (const juce::String& address, bool isOutput);
+
     // Structural changes.
     juce::String addMapping();
     void removeMapping (const juce::String& id);
@@ -90,6 +95,16 @@ public:
     // The scaler's normalised value mapped onto the mapping's scale range
     // (1 if unscaled, or if the scaler hasn't received a value yet).
     float getScaleFactor (const Mapping& m) const;
+
+    // What an output is currently sending (raw, before MIDI rounding).
+    // Only meaningful once the mapping has a live value.
+    float getOutputValue (const Mapping& m, const OutputTarget& out) const;
+
+    // Sets an input's value by hand (e.g. dragging it in the UI), exactly
+    // as if it had arrived with no fade: any running fade is cancelled and
+    // the outputs - and anything it scales - are sent immediately.
+    void setValueManually (const juce::String& inputId, float value);
+    void logManualValue (const juce::String& inputId);
 
     // MIDI learn: the next CC or pitch bend received sets the input's MIDI
     // device/channel/message (and switches it to MIDI). A CC 0-31 followed
@@ -150,7 +165,6 @@ private:
     void flushDirty();
     void sendOutputs (const Mapping& m);
     void sendToOutput (const OutputTarget& out, float value);
-    float getOutputValue (const Mapping& m, const OutputTarget& out) const;
     juce::String describeResult (const InputChannel& input) const;
 
     void restartReceiver();
@@ -173,6 +187,7 @@ private:
     std::vector<Scaler> scalers;
     std::vector<ActiveFade> activeFades;
     juce::StringArray dirtyInputIds;
+    juce::StringArray reportedInvalidAddresses;   // logged once each, not on every fade tick
     juce::File currentProjectFile;
     juce::UndoManager undoManager;
 

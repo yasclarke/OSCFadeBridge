@@ -16,12 +16,16 @@ public:
     // Re-reads all fields (and the target list) from the engine.
     void refreshFromEngine();
 
-    // Highlights the destination if some other output (in any mapping)
-    // sends the same thing to the same target.
-    void refreshDuplicateWarning();
+    // Highlights the destination in red if it isn't a valid OSC address, or
+    // orange if some other output (in any mapping) sends the same thing to
+    // the same target.
+    void refreshWarnings();
+
+    // Shows what this output is currently sending.
+    void refreshValue();
 
     // Column layout shared with the header labels above the rows.
-    static constexpr int targetWidth = 130, rangeWidth = 64, removeWidth = 24, gap = 4;
+    static constexpr int targetWidth = 130, rangeWidth = 64, valueWidth = 64, removeWidth = 24, gap = 4;
 
 private:
     void commitFields();
@@ -39,6 +43,7 @@ private:
     juce::TextEditor numberEditor;
     juce::TextEditor minEditor;
     juce::TextEditor maxEditor;
+    juce::Label valueLabel;
     juce::TextButton removeButton { "x" };
 };
 
@@ -116,6 +121,7 @@ private:
     juce::Label outputsTargetHeader { {}, "Target" };
     juce::Label outputsColumnHeader { {}, "Address / MIDI Message" };
     juce::Label outputsRangeHeader { {}, "Out Range" };
+    juce::Label outputsValueHeader { {}, "Value" };
     juce::OwnedArray<OutputRowComponent> outputRows;
     juce::TextButton addOutputButton { "+ Add Output" };
 

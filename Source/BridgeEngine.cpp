@@ -229,6 +229,34 @@ bool BridgeEngine::isOutputDuplicated (const juce::String& mappingId, int output
     return false;
 }
 
+juce::String BridgeEngine::getOscAddressProblem (const juce::String& address, bool isOutput)
+{
+    // JUCE's own parsing is the definition of valid - sending to an address
+    // it rejects throws.
+    try
+    {
+        if (isOutput)
+            juce::OSCAddressPattern { address };
+        else
+            juce::OSCAddress { address };
+        return {};
+    }
+    catch (const juce::OSCFormatError&)
+    {
+    }
+
+    // OSC docs (e.g. for X32 desks) often show the type tag after the address.
+    if (address.contains (" ,"))
+        return "Remove the type tag (\"" + address.fromFirstOccurrenceOf (" ,", true, false).trim()
+                 + "\") - it isn't part of the address, and values are always sent as floats";
+
+    if (! address.startsWithChar ('/'))
+        return "OSC addresses must start with /";
+
+    return isOutput ? "OSC addresses can't contain spaces or #"
+                    : "OSC input addresses can't contain spaces or any of # * , ? [ ] { }";
+}
+
 juce::String BridgeEngine::addMapping()
 {
     auto after = captureState();
@@ -421,6 +449,22 @@ float BridgeEngine::getScaleFactor (const Mapping& m) const
         return 1.0f;
 
     return juce::jmap (scaler->getNormalisedValue(), m.scaleMin, m.scaleMax);
+}
+
+void BridgeEngine::setValueManually (const juce::String& inputId, float value)
+{
+    if (auto* input = findInputById (inputId))
+    {
+        applyInputValue (*input, value, 0.0);
+        flushDirty();
+    }
+}
+
+void BridgeEngine::logManualValue (const juce::String& inputId)
+{
+    if (auto* input = findInputById (inputId); input != nullptr && input->hasLiveValue)
+        log ("Manual: " + input->getDisplayName() + "=" + juce::String (input->liveValue, 3)
+               + (findMappingById (inputId) != nullptr ? "  -> " + describeResult (*input) : juce::String()));
 }
 
 void BridgeEngine::startMidiLearn (const juce::String& inputId)
@@ -888,8 +932,25 @@ void BridgeEngine::sendToOutput (const OutputTarget& out, float value)
     if (target->kind == TargetKind::osc)
     {
         auto it = oscSenders.find (target->id);
-        if (it == oscSenders.end() || ! it->second->send (out.address, value))
+        if (it == oscSenders.end())
+        {
             log ("TX FAILED " + target->name + " " + out.address);
+            return;
+        }
+
+        // An invalid address makes JUCE throw, which would take down the app
+        // from inside a timer callback - skip that one output instead.
+        try
+        {
+            if (! it->second->send (juce::OSCMessage (juce::OSCAddressPattern (out.address), value)))
+                log ("TX FAILED " + target->name + " " + out.address);
+        }
+        catch (const juce::OSCFormatError&)
+        {
+            if (reportedInvalidAddresses.addIfNotAlreadyThere (out.address))
+                log ("TX SKIPPED " + target->name + " \"" + out.address + "\": "
+                       + getOscAddressProblem (out.address, true));
+        }
         return;
     }
 

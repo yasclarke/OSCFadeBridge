@@ -5,6 +5,28 @@
 #include "GlobalSettingsComponent.h"
 #include "MappingInspectorComponent.h"
 
+// The live value in an input list row, settable by hand for testing:
+// drag up/right to raise it and down/left to lower it (Shift for fine
+// control), or double-click to type a value.
+class DraggableValueLabel : public juce::Label
+{
+public:
+    DraggableValueLabel();
+
+    void mouseDown (const juce::MouseEvent& e) override;
+    void mouseDrag (const juce::MouseEvent& e) override;
+    void mouseUp (const juce::MouseEvent& e) override;
+
+    std::function<void()> onPressed;
+    std::function<void (float normalisedDelta)> onDragged;   // a full-range drag is 1.0
+    std::function<void()> onDragEnded;
+    std::function<void (const juce::String&)> onValueTyped;
+
+private:
+    juce::Point<float> lastDragPosition;
+    bool wasDragged = false;
+};
+
 // One compact, single-line summary row in the input list: the input's
 // name (its address or MIDI message) and its current live value.
 // Click to select for editing in the inspector pane.
@@ -30,7 +52,8 @@ private:
     std::function<void (const juce::String&)> onSelected;
 
     juce::Label nameLabel;
-    juce::Label valueLabel;
+    DraggableValueLabel valueLabel;
+    float dragNormalised = 0.0f;   // where a drag has moved the value to, 0-1 within the input range
 
     bool selected = false;
     bool hovered = false;
