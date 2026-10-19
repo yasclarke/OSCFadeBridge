@@ -43,6 +43,15 @@ juce::PopupMenu MainMenuModel::getMenuForIndex (int topLevelMenuIndex, const juc
         redoItem.shortcutKeyDescription = "Cmd+Shift+Z";
         redoItem.isEnabled = owner.canRedo();
         menu.addItem (redoItem);
+
+        menu.addSeparator();
+
+        juce::PopupMenu::Item duplicateItem;
+        duplicateItem.itemID = 7;
+        duplicateItem.text = "Duplicate Mapping";
+        duplicateItem.shortcutKeyDescription = "Cmd+D";
+        duplicateItem.isEnabled = owner.canDuplicate();
+        menu.addItem (duplicateItem);
     }
 
     return menu;
@@ -58,6 +67,7 @@ void MainMenuModel::menuItemSelected (int menuItemID, int)
         case 4: owner.saveProjectAs(); break;
         case 5: owner.undo();         break;
         case 6: owner.redo();         break;
+        case 7: owner.duplicateSelectedMapping(); break;
         default: break;
     }
 }
@@ -180,10 +190,48 @@ void InputSummaryRow::setSelected (bool shouldBeSelected)
     }
 }
 
-void InputSummaryRow::mouseDown (const juce::MouseEvent&)
+void InputSummaryRow::mouseDown (const juce::MouseEvent& e)
 {
     if (onSelected)
         onSelected (inputId);
+
+    if (e.mods.isPopupMenu())
+    {
+        if (onContextMenu)
+            onContextMenu();
+        return;
+    }
+
+    beginDragAutoRepeat (50);   // keeps the list auto-scrolling while held at an edge
+}
+
+void InputSummaryRow::mouseDrag (const juce::MouseEvent& e)
+{
+    if (e.mods.isPopupMenu() || (! reordering && e.getDistanceFromDragStart() < 5))
+        return;
+
+    if (! reordering)
+    {
+        reordering = true;
+        setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+        setAlpha (0.5f);
+    }
+
+    if (onReorderDrag)
+        onReorderDrag (e);
+}
+
+void InputSummaryRow::mouseUp (const juce::MouseEvent&)
+{
+    if (! reordering)
+        return;
+
+    reordering = false;
+    setMouseCursor (juce::MouseCursor::NormalCursor);
+    setAlpha (1.0f);
+
+    if (onReorderDrop)
+        onReorderDrop();
 }
 
 void InputSummaryRow::mouseEnter (const juce::MouseEvent&)
@@ -235,17 +283,29 @@ void InputListComponent::setShowScalers (bool shouldShowScalers)
 
 void InputListComponent::rebuild()
 {
+    // Any drag in progress belonged to a row that's about to go.
+    draggingId.clear();
+    dropIndex = -1;
     rows.clear();
 
     auto addRow = [this] (const InputChannel& input)
     {
-        addAndMakeVisible (rows.add (new InputSummaryRow (engine, input.id, [this] (const juce::String& id)
+        auto* row = rows.add (new InputSummaryRow (engine, input.id, [this] (const juce::String& id)
         {
             selectedId = id;
             updateSelectionHighlight();
             if (onSelectionChanged)
                 onSelectionChanged (id);
-        })));
+        }));
+
+        row->onReorderDrag = [this, row] (const juce::MouseEvent& e) { reorderDrag (*row, e); };
+        row->onReorderDrop = [this] { reorderDrop(); };
+        row->onContextMenu = [this]
+        {
+            if (onContextMenuRequested)
+                onContextMenuRequested();
+        };
+        addAndMakeVisible (row);
     };
 
     if (showScalers)
@@ -277,10 +337,69 @@ void InputListComponent::updateSelectionHighlight()
         row->setSelected (row->getInputId() == selectedId);
 }
 
+int InputListComponent::indexOf (const juce::String& id) const
+{
+    for (int i = 0; i < rows.size(); ++i)
+        if (rows[i]->getInputId() == id)
+            return i;
+    return -1;
+}
+
+void InputListComponent::reorderDrag (InputSummaryRow& row, const juce::MouseEvent& e)
+{
+    const auto pos = e.getEventRelativeTo (this).getPosition();
+    const int from = indexOf (row.getInputId());
+    const int before = juce::jlimit (0, rows.size(), (pos.y + rowHeight / 2) / rowHeight);
+
+    draggingId = row.getInputId();
+    dropIndex = (before == from || before == from + 1) ? -1 : before;   // dropping there wouldn't move it
+    repaint();
+
+    if (auto* viewport = findParentComponentOfClass<juce::Viewport>())
+    {
+        const auto inViewport = viewport->getLocalPoint (this, pos);
+        viewport->autoScroll (inViewport.x, inViewport.y, 20, 8);
+    }
+}
+
+void InputListComponent::reorderDrop()
+{
+    const auto id = draggingId;
+    const int before = dropIndex;
+    draggingId.clear();
+    dropIndex = -1;
+    repaint();
+
+    if (id.isEmpty() || before < 0)
+        return;
+
+    // Moving rebuilds this list, which would delete the row whose mouseUp
+    // we're inside - so do it once that's finished.
+    juce::MessageManager::callAsync ([safeThis = juce::Component::SafePointer<InputListComponent> (this), id, before]
+    {
+        if (safeThis == nullptr)
+            return;
+
+        if (safeThis->showScalers)
+            safeThis->engine.moveScaler (id, before);
+        else
+            safeThis->engine.moveMapping (id, before);
+    });
+}
+
+void InputListComponent::paintOverChildren (juce::Graphics& g)
+{
+    if (dropIndex < 0)
+        return;
+
+    const int y = juce::jlimit (1, juce::jmax (1, getHeight() - 2), dropIndex * rowHeight);
+    g.setColour (findColour (juce::TextEditor::focusedOutlineColourId));
+    g.fillRoundedRectangle (juce::Rectangle<float> (2.0f, (float) y - 1.0f, (float) getWidth() - 4.0f, 3.0f), 1.5f);
+}
+
 void InputListComponent::resized()
 {
     const int width = getWidth();
-    const int rowHeight = 28;
     int y = 0;
 
     for (auto* row : rows)
@@ -381,14 +500,17 @@ MainComponent::MainComponent()
     listViewport.setViewedComponent (&inputList, false);
     inputList.setSize (300, 10);
     inputList.onSelectionChanged = [this] (const juce::String& id) { selectInput (id); };
+    inputList.onContextMenuRequested = [this] { showInputContextMenu(); };
 
     addAndMakeVisible (addButton);
     addButton.onClick = [this]
     {
-        // The inspector rebuild this triggers is async, so it picks up the new selection.
-        currentSelection() = getCurrentPage() == scalersPage ? engine.addScaler() : engine.addMapping();
-        inputList.setSelectedId (currentSelection());
+        selectNewInput (getCurrentPage() == scalersPage ? engine.addScaler() : engine.addMapping());
     };
+
+    addAndMakeVisible (duplicateButton);
+    duplicateButton.setTooltip ("Copy the selected mapping, with all its outputs, to a new input address (Cmd+D)");
+    duplicateButton.onClick = [this] { duplicateSelectedMapping(); };
 
     addAndMakeVisible (inspectorViewport);
     inspectorPlaceholder.setJustificationType (juce::Justification::centred);
@@ -456,6 +578,7 @@ void MainComponent::showPage (Page page)
     for (auto* c : std::initializer_list<juce::Component*> { &listViewport, &listHeaderName, &listHeaderValue,
                                                               &addButton, &inspectorViewport })
         c->setVisible (! isSettings);
+    duplicateButton.setVisible (page == mappingsPage);
 
     if (! isSettings)
     {
@@ -469,6 +592,7 @@ void MainComponent::showPage (Page page)
     }
 
     rebuildInspector();
+    updateDuplicateButton();
     repaint();
 }
 
@@ -496,6 +620,7 @@ void MainComponent::handleProjectChanged()
 
     settingsComponent.refreshFromEngine();
     updateTitle();
+    updateDuplicateButton();
     menuModel.menuItemsChanged();
 }
 
@@ -572,6 +697,11 @@ bool MainComponent::keyPressed (const juce::KeyPress& key)
         engine.redo();
         return true;
     }
+    if (key == juce::KeyPress ('d', juce::ModifierKeys (cmd), 0))
+    {
+        duplicateSelectedMapping();
+        return true;
+    }
     if (key == juce::KeyPress ('n', juce::ModifierKeys (cmd), 0))
     {
         newProject();
@@ -597,6 +727,45 @@ bool MainComponent::keyPressed (const juce::KeyPress& key)
 }
 
 
+void MainComponent::duplicateSelectedMapping()
+{
+    if (! canDuplicate())
+        return;
+
+    // Often called from the inspector's own button, so rebuild it asynchronously.
+    selectNewInput (engine.duplicateMapping (selectedMappingId));
+}
+
+void MainComponent::selectNewInput (const juce::String& id)
+{
+    if (id.isEmpty())
+        return;
+
+    // Adding it already refreshed the inspector in place for the old
+    // selection; this may be inside one of its callbacks, so rebuild it for
+    // the new one asynchronously.
+    currentSelection() = id;
+    inputList.setSelectedId (id);
+    triggerAsyncUpdate();
+    updateDuplicateButton();
+    menuModel.menuItemsChanged();
+}
+
+void MainComponent::showInputContextMenu()
+{
+    if (getCurrentPage() != mappingsPage)
+        return;
+
+    juce::PopupMenu menu;
+    menu.addItem (1, "Duplicate Mapping");
+
+    menu.showMenuAsync (juce::PopupMenu::Options(), [safeThis = juce::Component::SafePointer<MainComponent> (this)] (int result)
+    {
+        if (safeThis != nullptr && result == 1)
+            safeThis->duplicateSelectedMapping();
+    });
+}
+
 void MainComponent::selectInput (const juce::String& id)
 {
     // Clicking a row's value to drag it also selects the row - don't
@@ -606,6 +775,8 @@ void MainComponent::selectInput (const juce::String& id)
 
     currentSelection() = id;
     rebuildInspector();
+    updateDuplicateButton();
+    menuModel.menuItemsChanged();
 }
 
 void MainComponent::rebuildInspector()
@@ -726,7 +897,9 @@ void MainComponent::resized()
         content = content.reduced (10);
 
         auto addButtonArea = content.removeFromBottom (30);
-        addButton.setBounds (addButtonArea.removeFromLeft (150));
+        addButton.setBounds (addButtonArea.removeFromLeft (130));
+        addButtonArea.removeFromLeft (6);
+        duplicateButton.setBounds (addButtonArea.removeFromLeft (100));
         content.removeFromBottom (6);
 
         auto header = content.removeFromTop (18);

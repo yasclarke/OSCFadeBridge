@@ -29,7 +29,8 @@ private:
 
 // One compact, single-line summary row in the input list: the input's
 // name (its address or MIDI message) and its current live value.
-// Click to select for editing in the inspector pane.
+// Click to select for editing in the inspector pane; drag the name to
+// reorder.
 class InputSummaryRow : public juce::Component
 {
 public:
@@ -39,12 +40,18 @@ public:
     void paint (juce::Graphics& g) override;
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
     void mouseEnter (const juce::MouseEvent&) override;
     void mouseExit (const juce::MouseEvent&) override;
 
     const juce::String& getInputId() const { return inputId; }
     void setSelected (bool shouldBeSelected);
     void refresh();
+
+    std::function<void (const juce::MouseEvent&)> onReorderDrag;
+    std::function<void()> onReorderDrop;
+    std::function<void()> onContextMenu;   // right-click (or ctrl-click); the row is selected first
 
 private:
     BridgeEngine& engine;
@@ -57,6 +64,7 @@ private:
 
     bool selected = false;
     bool hovered = false;
+    bool reordering = false;
 };
 
 // The master list: a scrollable stack of InputSummaryRow showing either
@@ -71,16 +79,28 @@ public:
     void resized() override;
     void refreshRows();
     void setSelectedId (const juce::String& id);
+    void paintOverChildren (juce::Graphics& g) override;
 
     std::function<void (const juce::String&)> onSelectionChanged;
+    std::function<void()> onContextMenuRequested;
 
 private:
     void updateSelectionHighlight();
+    void reorderDrag (InputSummaryRow& row, const juce::MouseEvent& e);
+    void reorderDrop();
+    int indexOf (const juce::String& id) const;
+
+    static constexpr int rowHeight = 28;
 
     BridgeEngine& engine;
     bool showScalers = false;
     juce::String selectedId;
     juce::OwnedArray<InputSummaryRow> rows;
+
+    // While a row is being dragged: its input, and the row index it would be
+    // inserted before (-1 when not dragging or the drop wouldn't move it).
+    juce::String draggingId;
+    int dropIndex = -1;
 };
 
 // A section title with a small arrow in front of it that rotates from
@@ -146,6 +166,9 @@ public:
     void openProject();
     void saveProjectAs();
     void save() { engine.saveProject(); }
+    void duplicateSelectedMapping();
+    void updateDuplicateButton() { duplicateButton.setEnabled (canDuplicate()); }
+    bool canDuplicate() { return getCurrentPage() == mappingsPage && engine.findMappingById (selectedMappingId) != nullptr; }
     void undo() { engine.undo(); }
     void redo() { engine.redo(); }
     bool canUndo() const { return engine.canUndo(); }
@@ -165,6 +188,8 @@ private:
     void appendLog (const juce::String& text);
     void handleProjectChanged();
     void selectInput (const juce::String& id);
+    void selectNewInput (const juce::String& id);
+    void showInputContextMenu();
     void rebuildInspector();
     void drawSection (juce::Graphics& g, juce::Rectangle<int> bounds, const juce::String& title);
     void updateTitle();
@@ -185,6 +210,7 @@ private:
     juce::Label listHeaderName { {}, "Input" };
     juce::Label listHeaderValue { {}, "Value" };
     juce::TextButton addButton;
+    juce::TextButton duplicateButton { "Duplicate" };
 
     juce::Viewport inspectorViewport;
     std::unique_ptr<MappingInspectorComponent> inspector;

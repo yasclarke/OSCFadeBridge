@@ -3,15 +3,17 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "BridgeEngine.h"
 
-// One row in a mapping's output list: send target, then either an OSC
-// address or a MIDI message (type/channel/number) depending on the
-// target's kind, then the output range and a remove button.
+// One entry in a mapping's output list, on two lines: send target, then
+// either an OSC address or a MIDI message (type/channel/number) depending on
+// the target's kind, and a remove button; below that the curve, output
+// range, OSC value type and current value.
 class OutputRowComponent : public juce::Component
 {
 public:
     OutputRowComponent (BridgeEngine& engineToUse, juce::String mappingIdToUse, int outputIndexToUse);
 
     void resized() override;
+    void paint (juce::Graphics& g) override;
 
     // Re-reads all fields (and the target list) from the engine.
     void refreshFromEngine();
@@ -25,7 +27,10 @@ public:
     void refreshValue();
 
     // Column layout shared with the header labels above the rows.
-    static constexpr int targetWidth = 130, rangeWidth = 64, valueWidth = 64, removeWidth = 24, gap = 4;
+    static constexpr int targetWidth = 130, rangeWidth = 64, valueWidth = 64, removeWidth = 24, intWidth = 34,
+                         curveWidth = 120, captionWidth = 44, gap = 4;
+    static constexpr int lineHeight = 26, lineGap = 4, bottomPadding = 8;
+    static constexpr int preferredHeight = lineHeight * 2 + lineGap + bottomPadding;
 
 private:
     void commitFields();
@@ -38,9 +43,13 @@ private:
     juce::ComboBox targetBox;
     juce::StringArray targetIds;   // targetBox item id N+2 = targetIds[N]; id 1 = none
     juce::TextEditor addressEditor;
+    juce::TextButton intButton { "Int" };
     juce::ComboBox midiTypeBox;
     juce::ComboBox channelBox;
     juce::TextEditor numberEditor;
+    juce::Label curveCaption { {}, "Curve" };
+    juce::ComboBox curveBox;
+    juce::Label rangeCaption { {}, "Range" };
     juce::TextEditor minEditor;
     juce::TextEditor maxEditor;
     juce::Label valueLabel;
@@ -120,8 +129,6 @@ private:
     juce::Label outputsLabel { {}, "Outputs" };
     juce::Label outputsTargetHeader { {}, "Target" };
     juce::Label outputsColumnHeader { {}, "Address / MIDI Message" };
-    juce::Label outputsRangeHeader { {}, "Out Range" };
-    juce::Label outputsValueHeader { {}, "Value" };
     juce::OwnedArray<OutputRowComponent> outputRows;
     juce::TextButton addOutputButton { "+ Add Output" };
 

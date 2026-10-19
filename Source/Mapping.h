@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_core/juce_core.h>
+#include <juce_audio_basics/juce_audio_basics.h>
 #include <vector>
 
 // Which kind of MIDI message carries a value. Raw values are 0-127 for
@@ -121,6 +122,108 @@ struct SendTarget
 
 // One output that an incoming fade is forwarded to, with its own scale range.
 // Which of `address` / `midi` is used depends on the kind of its target.
+// Shapes the normalised 0-1 value before it is mapped onto an output's
+// range. "In" curves start slowly, "out" curves start quickly; each keeps
+// 0 -> 0 and 1 -> 1, so the range end points are unchanged.
+//
+// The fader curves treat the output range as decibels (or dB x 100, as
+// Yamaha desks use) and move like a physical console fader, using the
+// X32's documented fader law: +10 dB at the top, 0 dB at 75%, -10 at 50%,
+// -30 at 25%, -60 at 6.25%, -inf at the bottom. The output range picks out
+// the matching stretch of the fader, so -60..0 dB moves between those two
+// marks. Anything below -90 dB counts as -inf, so a range from the desk's
+// -inf value (e.g. -32768) starts at the bottom of the fader.
+enum class OutputCurve { linear, easeIn, easeOut, sCurve, exponential, logarithmic, equalPower, faderDb, faderDb100 };
+
+struct OutputCurveInfo
+{
+    OutputCurve curve;
+    const char* id;     // stored in settings.json
+    const char* name;   // shown in the UI
+};
+
+inline constexpr OutputCurveInfo outputCurves[] =
+{
+    { OutputCurve::linear,      "linear",      "Linear" },
+    { OutputCurve::easeIn,      "easeIn",      "Ease In" },
+    { OutputCurve::easeOut,     "easeOut",     "Ease Out" },
+    { OutputCurve::sCurve,      "sCurve",      "S-Curve" },
+    { OutputCurve::exponential, "exponential", "Exponential" },
+    { OutputCurve::logarithmic, "logarithmic", "Logarithmic" },
+    { OutputCurve::equalPower,  "equalPower",  "Equal Power" },
+    { OutputCurve::faderDb,     "faderDb",     "Fader dB" },
+    { OutputCurve::faderDb100,  "faderDb100",  "Fader dB x100" },
+};
+
+// Fader position (0-1) -> dB, and back. Position 0 is -inf (returned as
+// anything below faderFloorDb).
+constexpr float faderFloorDb = -90.0f;
+
+inline float faderPositionToDb (float pos)
+{
+    if (pos <= 0.0f)    return faderFloorDb - 1.0f;
+    if (pos >= 0.5f)    return pos * 40.0f - 30.0f;
+    if (pos >= 0.25f)   return pos * 80.0f - 50.0f;
+    if (pos >= 0.0625f) return pos * 160.0f - 70.0f;
+    return pos * 480.0f - 90.0f;
+}
+
+inline float faderDbToPosition (float db)
+{
+    if (db < faderFloorDb) return 0.0f;
+    if (db >= -10.0f)      return juce::jmin (1.0f, (db + 30.0f) / 40.0f);
+    if (db >= -30.0f)      return (db + 50.0f) / 80.0f;
+    if (db >= -60.0f)      return (db + 70.0f) / 160.0f;
+    return (db + 90.0f) / 480.0f;
+}
+
+// x (0-1) -> 0-1 position within [outMin, outMax] for the fader curves.
+inline float applyFaderCurve (float x, float outMin, float outMax, float unitsPerDb)
+{
+    if (outMax == outMin)
+        return x;
+
+    const float pos = juce::jmap (x, faderDbToPosition (outMin / unitsPerDb), faderDbToPosition (outMax / unitsPerDb));
+    const float db = faderPositionToDb (pos);
+    if (db < faderFloorDb)
+        return outMin < outMax ? 0.0f : 1.0f;
+
+    return juce::jlimit (0.0f, 1.0f, (db * unitsPerDb - outMin) / (outMax - outMin));
+}
+
+inline float applyCurve (OutputCurve curve, float x, float outMin, float outMax)
+{
+    switch (curve)
+    {
+        case OutputCurve::faderDb:     return applyFaderCurve (x, outMin, outMax, 1.0f);
+        case OutputCurve::faderDb100:  return applyFaderCurve (x, outMin, outMax, 100.0f);
+        case OutputCurve::easeIn:      return x * x;
+        case OutputCurve::easeOut:     return 1.0f - (1.0f - x) * (1.0f - x);
+        case OutputCurve::sCurve:      return x * x * (3.0f - 2.0f * x);
+        case OutputCurve::exponential: return x * x * x;
+        case OutputCurve::logarithmic: return 1.0f - (1.0f - x) * (1.0f - x) * (1.0f - x);
+        case OutputCurve::equalPower:  return std::sin (x * juce::MathConstants<float>::halfPi);
+        case OutputCurve::linear:      break;
+    }
+    return x;
+}
+
+inline juce::String curveToString (OutputCurve c)
+{
+    for (auto& info : outputCurves)
+        if (info.curve == c)
+            return info.id;
+    return "linear";
+}
+
+inline OutputCurve curveFromString (const juce::String& s)
+{
+    for (auto& info : outputCurves)
+        if (s == info.id)
+            return info.curve;
+    return OutputCurve::linear;
+}
+
 struct OutputTarget
 {
     juce::String targetId;                  // SendTarget::id - empty means "not sent anywhere"
@@ -128,6 +231,8 @@ struct OutputTarget
     MidiSpec midi;                          // for MIDI targets
     float outMin = 0.0f;
     float outMax = 1.0f;
+    bool sendAsInt = false;                 // OSC only: round and send int32 instead of float32
+    OutputCurve curve = OutputCurve::linear;
 
     juce::var toVar() const
     {
@@ -137,6 +242,8 @@ struct OutputTarget
         obj->setProperty ("midi", midi.toVar());
         obj->setProperty ("outMin", (double) outMin);
         obj->setProperty ("outMax", (double) outMax);
+        obj->setProperty ("sendAsInt", sendAsInt);
+        obj->setProperty ("curve", curveToString (curve));
         return juce::var (obj);
     }
 
@@ -148,6 +255,8 @@ struct OutputTarget
         t.midi     = MidiSpec::fromVar (v.getProperty ("midi", juce::var()));
         t.outMin   = (float) (double) v.getProperty ("outMin", 0.0);
         t.outMax   = (float) (double) v.getProperty ("outMax", 1.0);
+        t.sendAsInt = (bool) v.getProperty ("sendAsInt", false);
+        t.curve     = curveFromString (v.getProperty ("curve", "linear").toString());
         return t;
     }
 };

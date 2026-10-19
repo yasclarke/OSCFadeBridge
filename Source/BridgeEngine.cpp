@@ -248,7 +248,7 @@ juce::String BridgeEngine::getOscAddressProblem (const juce::String& address, bo
     // OSC docs (e.g. for X32 desks) often show the type tag after the address.
     if (address.contains (" ,"))
         return "Remove the type tag (\"" + address.fromFirstOccurrenceOf (" ,", true, false).trim()
-                 + "\") - it isn't part of the address, and values are always sent as floats";
+                 + "\") - it isn't part of the address. Values are sent as floats, or as ints with the output's Int button on";
 
     if (! address.startsWithChar ('/'))
         return "OSC addresses must start with /";
@@ -273,6 +273,75 @@ juce::String BridgeEngine::addMapping()
 
     performSnapshotChange (after, "Add Mapping");
     return newId;
+}
+
+juce::String BridgeEngine::duplicateMapping (const juce::String& id)
+{
+    auto after = captureState();
+    auto it = std::find_if (after.mappings.begin(), after.mappings.end(), [&] (const Mapping& m) { return m.id == id; });
+    if (it == after.mappings.end())
+        return {};
+
+    Mapping copy = *it;
+    copy.id = juce::Uuid().toString();
+    copy.copyRuntimeStateFrom (Mapping());
+
+    // A copy on the same OSC address would fire with every cue meant for the
+    // original, so number it on: /bridge/vox -> /bridge/vox2, /bridge/fader3 -> /bridge/fader4.
+    if (copy.source == InputSource::osc)
+    {
+        const auto stem = copy.inputAddress.trimCharactersAtEnd ("0123456789");
+        const auto suffix = copy.inputAddress.substring (stem.length());
+        for (int n = juce::jmax (1, suffix.getIntValue()) + 1; ; ++n)
+            if (! isInputAddressInUse (stem + juce::String (n), {}))
+            {
+                copy.inputAddress = stem + juce::String (n);
+                break;
+            }
+    }
+
+    const auto newId = copy.id;
+    after.mappings.insert (it + 1, std::move (copy));
+
+    performSnapshotChange (after, "Duplicate Mapping");
+    return newId;
+}
+
+namespace
+{
+    template <typename T>
+    bool moveById (std::vector<T>& items, const juce::String& id, int insertBeforeIndex)
+    {
+        auto it = std::find_if (items.begin(), items.end(), [&] (const T& item) { return item.id == id; });
+        if (it == items.end())
+            return false;
+
+        const int from = (int) std::distance (items.begin(), it);
+        int to = juce::jlimit (0, (int) items.size(), insertBeforeIndex);
+        if (to > from)
+            --to;   // removing the item first shifts everything after it up one
+        if (to == from)
+            return false;
+
+        T item = std::move (*it);
+        items.erase (it);
+        items.insert (items.begin() + to, std::move (item));
+        return true;
+    }
+}
+
+void BridgeEngine::moveMapping (const juce::String& id, int insertBeforeIndex)
+{
+    auto after = captureState();
+    if (moveById (after.mappings, id, insertBeforeIndex))
+        performSnapshotChange (after, "Move Mapping");
+}
+
+void BridgeEngine::moveScaler (const juce::String& id, int insertBeforeIndex)
+{
+    auto after = captureState();
+    if (moveById (after.scalers, id, insertBeforeIndex))
+        performSnapshotChange (after, "Move Scaler");
 }
 
 void BridgeEngine::removeMapping (const juce::String& id)
@@ -914,7 +983,7 @@ float BridgeEngine::getOutputValue (const Mapping& m, const OutputTarget& out) c
 {
     // A scale range above 1 can boost, but never past the output range.
     const float normalised = juce::jlimit (0.0f, 1.0f, m.getNormalisedValue() * getScaleFactor (m));
-    return juce::jmap (normalised, out.outMin, out.outMax);
+    return juce::jmap (applyCurve (out.curve, normalised, out.outMin, out.outMax), out.outMin, out.outMax);
 }
 
 void BridgeEngine::sendOutputs (const Mapping& m)
@@ -942,7 +1011,11 @@ void BridgeEngine::sendToOutput (const OutputTarget& out, float value)
         // from inside a timer callback - skip that one output instead.
         try
         {
-            if (! it->second->send (juce::OSCMessage (juce::OSCAddressPattern (out.address), value)))
+            const juce::OSCAddressPattern pattern (out.address);
+            const bool sent = out.sendAsInt
+                                ? it->second->send (juce::OSCMessage (pattern, (juce::int32) juce::roundToInt (value)))
+                                : it->second->send (juce::OSCMessage (pattern, value));
+            if (! sent)
                 log ("TX FAILED " + target->name + " " + out.address);
         }
         catch (const juce::OSCFormatError&)
@@ -998,7 +1071,8 @@ juce::String BridgeEngine::describeResult (const InputChannel& input) const
         const float value = getOutputValue (*m, out);
 
         if (target->kind == TargetKind::osc)
-            parts.add (target->name + " " + out.address + "=" + juce::String (value, 4));
+            parts.add (target->name + " " + out.address + "="
+                         + (out.sendAsInt ? juce::String (juce::roundToInt (value)) : juce::String (value, 4)));
         else
             parts.add (target->name + " " + out.midi.describe() + "="
                          + juce::String (juce::roundToInt (juce::jlimit (0.0f, out.midi.maxValue(), value))));

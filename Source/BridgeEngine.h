@@ -75,7 +75,12 @@ public:
 
     // Structural changes.
     juce::String addMapping();
+    juce::String duplicateMapping (const juce::String& id);   // inserted after the original; returns the copy's id
     void removeMapping (const juce::String& id);
+    // Moves an input so it sits before the one currently at insertBeforeIndex
+    // (the list size = move to the end).
+    void moveMapping (const juce::String& id, int insertBeforeIndex);
+    void moveScaler (const juce::String& id, int insertBeforeIndex);
     void addOutput (const juce::String& mappingId);
     void removeOutput (const juce::String& mappingId, int outputIndex);
     juce::String addScaler();

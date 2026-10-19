@@ -7,6 +7,8 @@ It listens for OSC messages on custom addresses carrying `[x, y]` — a destinat
 ## Features
 
 - Custom input addresses, each mapped to one or more output addresses with independent input/output scale ranges (e.g. a 0–1 fader driving both a 0–1 output and a −60–0 dB output at once)
+- Per-output fade curves: Linear, Ease In/Out, S-Curve, Exponential, Logarithmic, Equal Power, and Fader dB / Fader dB x100, which move like a console fader (0 dB at 75%, −10 at 50%, −30 at 25%, −∞ at the bottom) for outputs in dB or hundredths of a dB
+- OSC outputs send floats or, with the Int/Flt switch, rounded integers — needed by desks such as the Yamaha DM3 (e.g. `/yosc:req/set/MIXER:Current/InCh/Fader/Level/1/1` with range −32768–1000 and Fader dB x100)
 - Multiple named send targets — OSC hosts/ports and MIDI output ports — with each output choosing its own target
 - MIDI inputs and outputs: 7-bit CC, 14-bit CC and pitch bend. MIDI inputs have a per-mapping fade time (0 = follow instantly, e.g. a hardware fader)
 - VCA-style scalers: inputs with no outputs of their own (OSC or MIDI). A mapping scaled by one has its normalised value multiplied by the scaler's, mapped onto a per-mapping range (e.g. 0.9–1 for a gentle trim). Scalers can be named
@@ -15,6 +17,7 @@ It listens for OSC messages on custom addresses carrying `[x, y]` — a destinat
 - Configurable OSC receive port and update rate
 - Undo/redo for every edit
 - Multiple named projects (New / Open / Save / Save As), each with its own mappings and settings. Projects from earlier versions load with their send host/port as a single target
+- Duplicate a mapping (button, right-click menu or Cmd+D) with all its outputs, and drag mappings and scalers to reorder them
 - Duplicate-address protection on inputs, with a warning for duplicate outputs
 
 ## Installing

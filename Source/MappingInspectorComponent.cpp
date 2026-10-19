@@ -75,11 +75,29 @@ OutputRowComponent::OutputRowComponent (BridgeEngine& engineToUse, juce::String 
     numberEditor.setInputRestrictions (3, "0123456789");
     channelBox.setTooltip ("MIDI channel");
     numberEditor.setTooltip ("Controller number (MSB controller for 14-bit CC)");
+    for (int n = 0; n < juce::numElementsInArray (outputCurves); ++n)
+        curveBox.addItem (outputCurves[n].name, n + 1);
+    curveBox.setTooltip ("Shape of the fade between Out Min and Out Max. Ease In / Exponential start slowly, "
+                         "Ease Out / Logarithmic start quickly, Equal Power suits crossfades. Fader dB treats Out Min/Max "
+                         "as dB (Fader dB x100: hundredths of a dB, e.g. Yamaha DM3) and moves like a console "
+                         "fader - 0 dB at 75%, -10 at 50%, -30 at 25%, -inf at the bottom");
+    intButton.setClickingTogglesState (true);
+    intButton.setTooltip ("Value type sent: Flt = float (OSC type tag f), Int = rounded integer (type tag i) - "
+                          "click to switch. Desks such as the Yamaha DM3 need Int");
+    intButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff3a7bd5));
 
-    for (auto* c : std::initializer_list<juce::Component*> { &targetBox, &addressEditor, &midiTypeBox, &channelBox,
-                                                              &numberEditor, &minEditor, &maxEditor, &valueLabel,
+    for (auto* c : std::initializer_list<juce::Component*> { &targetBox, &addressEditor, &intButton, &midiTypeBox, &channelBox,
+                                                              &numberEditor, &curveCaption, &curveBox, &rangeCaption,
+                                                              &minEditor, &maxEditor, &valueLabel,
                                                               &removeButton })
         addAndMakeVisible (c);
+
+    for (auto* caption : { &curveCaption, &rangeCaption })
+    {
+        styleCaption (*caption);
+        caption->setJustificationType (juce::Justification::centredRight);
+    }
+    rangeCaption.setTooltip ("Output range: the values sent for input min and max (Out Min / Out Max)");
 
     valueLabel.setJustificationType (juce::Justification::centredRight);
     valueLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
@@ -132,6 +150,30 @@ OutputRowComponent::OutputRowComponent (BridgeEngine& engineToUse, juce::String 
     };
 
     channelBox.onChange = [this] { commitFields(); };
+
+    curveBox.onChange = [this]
+    {
+        const int index = curveBox.getSelectedId() - 1;
+        if (! juce::isPositiveAndBelow (index, juce::numElementsInArray (outputCurves)))
+            return;
+
+        engine.updateMapping (mappingId, [&] (Mapping& m)
+        {
+            if (juce::isPositiveAndBelow (outputIndex, (int) m.outputs.size()))
+                m.outputs[(size_t) outputIndex].curve = outputCurves[index].curve;
+        });
+    };
+
+    intButton.onClick = [this]
+    {
+        const bool asInt = intButton.getToggleState();
+        intButton.setButtonText (asInt ? "Int" : "Flt");
+        engine.updateMapping (mappingId, [&] (Mapping& m)
+        {
+            if (juce::isPositiveAndBelow (outputIndex, (int) m.outputs.size()))
+                m.outputs[(size_t) outputIndex].sendAsInt = asInt;
+        });
+    };
 
     for (auto* editor : { &addressEditor, &numberEditor, &minEditor, &maxEditor })
     {
@@ -210,8 +252,16 @@ void OutputRowComponent::refreshFromEngine()
     minEditor.setText (juce::String (out->outMin), false);
     maxEditor.setText (juce::String (out->outMax), false);
 
+    intButton.setToggleState (out->sendAsInt, juce::dontSendNotification);
+    for (int n = 0; n < juce::numElementsInArray (outputCurves); ++n)
+        if (outputCurves[n].curve == out->curve)
+            curveBox.setSelectedId (n + 1, juce::dontSendNotification);
+    intButton.setButtonText (out->sendAsInt ? "Int" : "Flt");
+
     addressEditor.setVisible (! isMidi);
     addressEditor.setEnabled (target != nullptr);
+    intButton.setVisible (! isMidi);
+    intButton.setEnabled (target != nullptr);
     midiTypeBox.setVisible (isMidi);
     channelBox.setVisible (isMidi);
     numberEditor.setVisible (isMidi && out->midi.type != MidiMessageType::pitchBend);
@@ -230,9 +280,10 @@ void OutputRowComponent::refreshValue()
     if (m != nullptr && m->hasLiveValue && target != nullptr)
     {
         const float value = engine.getOutputValue (*m, *out);
-        text = target->kind == TargetKind::midi
-                 ? juce::String (juce::roundToInt (juce::jlimit (0.0f, out->midi.maxValue(), value)))
-                 : juce::String (value, 3);
+        if (target->kind == TargetKind::midi)
+            text = juce::String (juce::roundToInt (juce::jlimit (0.0f, out->midi.maxValue(), value)));
+        else
+            text = out->sendAsInt ? juce::String (juce::roundToInt (value)) : juce::String (value, 3);
     }
 
     valueLabel.setText (text, juce::dontSendNotification);
@@ -267,29 +318,49 @@ void OutputRowComponent::refreshWarnings()
         setWarning (*editor, colour, tooltip);
 }
 
+void OutputRowComponent::paint (juce::Graphics& g)
+{
+    g.setColour (juce::Colours::grey.withAlpha (0.25f));
+    g.fillRect (0, getHeight() - 1, getWidth(), 1);
+}
+
 void OutputRowComponent::resized()
 {
-    auto area = getLocalBounds();
+    auto area = getLocalBounds().withTrimmedBottom (bottomPadding);
+    auto line1 = area.removeFromTop (lineHeight);
+    area.removeFromTop (lineGap);
+    auto line2 = area.removeFromTop (lineHeight);
 
-    targetBox.setBounds (area.removeFromLeft (targetWidth));
-    area.removeFromLeft (gap);
+    // Line 1: target, destination, remove.
+    targetBox.setBounds (line1.removeFromLeft (targetWidth));
+    line1.removeFromLeft (gap);
+    removeButton.setBounds (line1.removeFromRight (removeWidth));
+    line1.removeFromRight (gap);
 
-    removeButton.setBounds (area.removeFromRight (removeWidth));
-    area.removeFromRight (gap);
-    valueLabel.setBounds (area.removeFromRight (valueWidth));
-    area.removeFromRight (gap);
-    maxEditor.setBounds (area.removeFromRight (rangeWidth));
-    area.removeFromRight (gap);
-    minEditor.setBounds (area.removeFromRight (rangeWidth));
-    area.removeFromRight (gap);
+    addressEditor.setBounds (line1);
 
-    addressEditor.setBounds (area);
+    midiTypeBox.setBounds (line1.removeFromLeft (100));
+    line1.removeFromLeft (gap);
+    channelBox.setBounds (line1.removeFromLeft (54));
+    line1.removeFromLeft (gap);
+    numberEditor.setBounds (line1.removeFromLeft (50));
 
-    midiTypeBox.setBounds (area.removeFromLeft (100));
-    area.removeFromLeft (gap);
-    channelBox.setBounds (area.removeFromLeft (54));
-    area.removeFromLeft (gap);
-    numberEditor.setBounds (area.removeFromLeft (50));
+    // Line 2: curve, range, value type, live value - under the destination.
+    line2.removeFromLeft (targetWidth + gap);
+    line2.removeFromRight (removeWidth + gap);
+    valueLabel.setBounds (line2.removeFromRight (valueWidth));
+
+    curveCaption.setBounds (line2.removeFromLeft (captionWidth));
+    line2.removeFromLeft (gap);
+    curveBox.setBounds (line2.removeFromLeft (curveWidth));
+    line2.removeFromLeft (gap * 3);
+    rangeCaption.setBounds (line2.removeFromLeft (captionWidth));
+    line2.removeFromLeft (gap);
+    minEditor.setBounds (line2.removeFromLeft (rangeWidth));
+    line2.removeFromLeft (gap);
+    maxEditor.setBounds (line2.removeFromLeft (rangeWidth));
+    line2.removeFromLeft (gap * 3);
+    intButton.setBounds (line2.removeFromLeft (intWidth));
 }
 
 //==============================================================================
@@ -314,16 +385,14 @@ MappingInspectorComponent::MappingInspectorComponent (BridgeEngine& engineToUse,
              &midiNumberLabel, &midiNumberEditor, &midiFadeLabel, &midiFadeEditor,
              &inRangeLabel, &inMinEditor, &inMaxEditor,
              &scaledByLabel, &scaledByBox, &scaledByHint,
-             &outputsLabel, &outputsTargetHeader, &outputsColumnHeader, &outputsRangeHeader, &outputsValueHeader,
+             &outputsLabel, &outputsTargetHeader, &outputsColumnHeader,
              &addOutputButton, &removeButton })
         addAndMakeVisible (c);
 
     for (auto* l : { &nameLabel, &scaleRangeLabel, &sourceLabel, &inputAddressLabel, &midiDeviceLabel, &midiTypeLabel, &midiChannelLabel,
                      &midiNumberLabel, &midiFadeLabel, &inRangeLabel, &scaledByLabel, &scaledByHint,
-                     &outputsTargetHeader, &outputsColumnHeader, &outputsRangeHeader, &outputsValueHeader })
+                     &outputsTargetHeader, &outputsColumnHeader })
         styleCaption (*l);
-    outputsRangeHeader.setJustificationType (juce::Justification::centredRight);
-    outputsValueHeader.setJustificationType (juce::Justification::centredRight);
 
     outputsLabel.setFont (juce::Font (juce::FontOptions (15.0f, juce::Font::bold)));
 
@@ -338,8 +407,7 @@ MappingInspectorComponent::MappingInspectorComponent (BridgeEngine& engineToUse,
 
     for (auto* c : std::initializer_list<juce::Component*> { &scaledByLabel, &scaledByBox, &scaledByHint, &outputsLabel,
                                                               &scaleRangeLabel, &scaleMinEditor, &scaleMaxEditor,
-                                                              &outputsTargetHeader, &outputsColumnHeader,
-                                                              &outputsRangeHeader, &outputsValueHeader, &addOutputButton })
+                                                              &outputsTargetHeader, &outputsColumnHeader, &addOutputButton })
         c->setVisible (! isScaler);
 
     sourceBox.onChange = [this]
@@ -655,7 +723,7 @@ int MappingInspectorComponent::getPreferredHeight() const
              + fieldBlock + 16                             // scaled by
              + 22 + 4                                      // outputs label
              + labelHeight + 2                             // outputs column header
-             + outputRows.size() * (fieldHeight + gap)
+             + outputRows.size() * (OutputRowComponent::preferredHeight + gap)
              + 26 + 20                                     // add output button
              + 28;                                         // remove button
 }
@@ -761,17 +829,13 @@ void MappingInspectorComponent::resized()
         outputsTargetHeader.setBounds (row.removeFromLeft (R::targetWidth));
         row.removeFromLeft (R::gap);
         row.removeFromRight (R::removeWidth + R::gap);
-        outputsValueHeader.setBounds (row.removeFromRight (R::valueWidth));
-        row.removeFromRight (R::gap);
-        outputsRangeHeader.setBounds (row.removeFromRight (R::rangeWidth * 2 + R::gap));
-        row.removeFromRight (R::gap);
         outputsColumnHeader.setBounds (row);
         area.removeFromTop (2);
     }
 
     for (auto* row : outputRows)
     {
-        row->setBounds (area.removeFromTop (fieldHeight));
+        row->setBounds (area.removeFromTop (OutputRowComponent::preferredHeight));
         area.removeFromTop (gap);
     }
 
