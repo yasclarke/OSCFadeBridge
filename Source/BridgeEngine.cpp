@@ -733,17 +733,22 @@ void BridgeEngine::oscMessageReceived (const juce::OSCMessage& message)
         if (input.source != InputSource::osc || input.inputAddress != address)
             return;
 
-        if (message.size() < 2 || ! (message[0].isFloat32() || message[0].isInt32())
-                                 || ! (message[1].isFloat32() || message[1].isInt32()))
+        auto isNumber = [] (const juce::OSCArgument& a) { return a.isFloat32() || a.isInt32(); };
+        auto toFloat  = [] (const juce::OSCArgument& a) { return a.isFloat32() ? a.getFloat32() : (float) a.getInt32(); };
+
+        // [x] alone fades over the default fade time; [x, y] over y seconds.
+        if (message.isEmpty() || ! isNumber (message[0]) || (message.size() >= 2 && ! isNumber (message[1])))
         {
-            log ("RX " + address + "  ignored: expected 2 numeric args (x, y)");
+            log ("RX " + address + "  ignored: expected a numeric value, optionally followed by a numeric fade time (x[, y])");
             return;
         }
 
-        const float x = message[0].isFloat32() ? message[0].getFloat32() : (float) message[0].getInt32();
-        const float y = message[1].isFloat32() ? message[1].getFloat32() : (float) message[1].getInt32();
+        const bool usesDefaultFade = message.size() < 2;
+        const float x = toFloat (message[0]);
+        const float y = usesDefaultFade ? (float) settings.defaultFadeSeconds : toFloat (message[1]);
 
-        log ("RX " + address + "  x=" + juce::String (x, 3) + "  y=" + juce::String (y, 3) + "s");
+        log ("RX " + address + "  x=" + juce::String (x, 3) + "  y=" + juce::String (y, 3) + "s"
+               + (usesDefaultFade ? " (default)" : ""));
 
         if (applyInputValue (input, x, (double) y))
         {

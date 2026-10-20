@@ -420,6 +420,7 @@ struct GlobalSettings
 {
     int receivePort = 9000;
     double updateFrequencyHz = 30.0;
+    double defaultFadeSeconds = 1.0;   // for OSC inputs that arrive with a value but no fade time
     std::vector<SendTarget> targets;
 
     static GlobalSettings makeDefault()
@@ -442,6 +443,7 @@ struct GlobalSettings
         auto* obj = new juce::DynamicObject();
         obj->setProperty ("receivePort", receivePort);
         obj->setProperty ("updateFrequencyHz", updateFrequencyHz);
+        obj->setProperty ("defaultFadeSeconds", defaultFadeSeconds);
 
         juce::Array<juce::var> arr;
         for (auto& t : targets)
@@ -458,6 +460,7 @@ struct GlobalSettings
         GlobalSettings s;
         s.receivePort       = (int) v.getProperty ("receivePort", 9000);
         s.updateFrequencyHz = (double) v.getProperty ("updateFrequencyHz", 30.0);
+        s.defaultFadeSeconds = (double) v.getProperty ("defaultFadeSeconds", 1.0);
 
         if (auto* arr = v.getProperty ("targets", juce::var()).getArray())
         {

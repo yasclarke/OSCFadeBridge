@@ -69,6 +69,9 @@ private:
     juce::Label updateHzLabel { {}, "Update Rate (Hz)" };
     juce::TextEditor updateHzEditor;
 
+    juce::Label defaultFadeLabel { {}, "Default Fade (s)" };
+    juce::TextEditor defaultFadeEditor;
+
     juce::Label targetsLabel { {}, "Send Targets" };
     juce::TextButton addTargetButton { "+ Add Target" };
     juce::Label nameHeader { {}, "Name" };

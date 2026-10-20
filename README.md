@@ -2,7 +2,7 @@
 
 A small macOS app that bridges QLab (or anything else that speaks OSC) to an OSC-controlled mixing desk, handling fades in between.
 
-It listens for OSC messages on custom addresses carrying `[x, y]` — a destination value and a fade time in seconds — or for MIDI messages, and ramps from the last value it received to the new one over that duration, sending updates at a configurable rate to one or more mapped, independently-scaled OSC or MIDI outputs.
+It listens for OSC messages on custom addresses carrying `[x, y]` — a destination value and a fade time in seconds, or just `[x]` to use the default fade time (1 s unless changed in Settings) — or for MIDI messages, and ramps from the last value it received to the new one over that duration, sending updates at a configurable rate to one or more mapped, independently-scaled OSC or MIDI outputs.
 
 ## Features
 

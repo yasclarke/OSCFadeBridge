@@ -145,7 +145,7 @@ void TargetRowComponent::resized()
 GlobalSettingsComponent::GlobalSettingsComponent (BridgeEngine& engineToUse)
     : engine (engineToUse)
 {
-    for (auto* label : { &receivePortLabel, &updateHzLabel, &nameHeader, &kindHeader, &destinationHeader, &portHeader })
+    for (auto* label : { &receivePortLabel, &updateHzLabel, &defaultFadeLabel, &nameHeader, &kindHeader, &destinationHeader, &portHeader })
     {
         styleCaption (*label);
         addAndMakeVisible (label);
@@ -158,7 +158,10 @@ GlobalSettingsComponent::GlobalSettingsComponent (BridgeEngine& engineToUse)
     addAndMakeVisible (addTargetButton);
     addTargetButton.onClick = [this] { engine.addTarget(); };
 
-    for (auto* editor : { &receivePortEditor, &updateHzEditor })
+    defaultFadeEditor.setInputRestrictions (8, "0123456789.");
+    defaultFadeEditor.setTooltip ("Fade time used when an OSC input arrives with just a value and no fade time");
+
+    for (auto* editor : { &receivePortEditor, &updateHzEditor, &defaultFadeEditor })
     {
         addAndMakeVisible (editor);
         editor->onFocusLost = [this] { applyClicked(); };
@@ -181,6 +184,7 @@ void GlobalSettingsComponent::refreshFromEngine()
     const auto& s = engine.getSettings();
     receivePortEditor.setText (juce::String (s.receivePort), false);
     updateHzEditor.setText (juce::String (s.updateFrequencyHz), false);
+    defaultFadeEditor.setText (juce::String (s.defaultFadeSeconds), false);
 
     if (computeRowSignature() != rowSignature)
     {
@@ -219,6 +223,7 @@ void GlobalSettingsComponent::applyClicked()
     if (receivePort > 0 && receivePort <= 65535)
         s.receivePort = receivePort;
     s.updateFrequencyHz = juce::jmax (1.0, updateHzEditor.getText().getDoubleValue());
+    s.defaultFadeSeconds = juce::jmax (0.0, defaultFadeEditor.getText().getDoubleValue());
 
     engine.setSettings (s);
     refreshFromEngine();
@@ -247,6 +252,7 @@ void GlobalSettingsComponent::resized()
         auto row = area.removeFromTop (topRowHeight);
         layoutField (row, receivePortLabel, receivePortEditor, 100);
         layoutField (row, updateHzLabel, updateHzEditor, 130);
+        layoutField (row, defaultFadeLabel, defaultFadeEditor, 130);
     }
 
     area.removeFromTop (sectionGap);
