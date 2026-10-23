@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(OSCFadeBridge VERSION 1.3.1)
+project(OSCFadeBridge VERSION 1.3.2)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -18,6 +18,8 @@ juce_add_gui_app(OSCFadeBridge
     PRODUCT_NAME     "OSC Fade Bridge"
     BUNDLE_ID        "com.yaseenclarke.oscfadebridge"
     ICON_BIG         "${CMAKE_CURRENT_SOURCE_DIR}/Resources/AppIcon.png"
+    # Without this macOS can silently block OSC to desks on the LAN (EHOSTUNREACH)
+    PLIST_TO_MERGE   "<plist><dict><key>NSLocalNetworkUsageDescription</key><string>OSC Fade Bridge sends OSC to mixing desks and other devices on your local network.</string></dict></plist>"
 )
 
 target_sources(OSCFadeBridge PRIVATE
@@ -34,7 +36,7 @@ target_compile_definitions(OSCFadeBridge PRIVATE
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_APPLICATION_NAME_STRING="OSC Fade Bridge"
-    JUCE_APPLICATION_VERSION_STRING="1.3.1"
+    JUCE_APPLICATION_VERSION_STRING="1.3.2"
 )
 
 target_link_libraries(OSCFadeBridge
