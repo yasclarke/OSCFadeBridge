@@ -22,6 +22,8 @@ It listens for OSC messages on custom addresses carrying `[x, y]` — a destinat
 
 ## Installing
 
+Runs on macOS 12 Monterey or later, on both Apple Silicon and Intel Macs.
+
 Download the latest `.dmg` from [Releases](../../releases), open it, and drag **OSC Fade Bridge** into Applications.
 
 The app isn't signed with a paid Apple Developer ID, so on first launch Gatekeeper will refuse to open it. Right-click (or Control-click) the app in Applications and choose **Open**, then confirm in the dialog that appears — you only need to do this once.
