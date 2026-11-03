@@ -1,5 +1,6 @@
 #pragma once
 
+#include <deque>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "BridgeEngine.h"
 #include "GlobalSettingsComponent.h"
@@ -123,6 +124,34 @@ private:
     float angle = 0.0f;
 };
 
+// The activity log: the most recent lines, newest at the bottom. Lines are
+// queued by append() and shown by flush(), so a burst of messages costs one
+// update. A ListBox only draws the rows on screen, so unlike a TextEditor
+// it stays cheap however much has been logged - which matters, because it
+// shares the message thread with the fades. Click/shift-click to select
+// lines, Cmd+A / Cmd+C to copy them.
+class LogView : public juce::ListBox, private juce::ListBoxModel
+{
+public:
+    LogView();
+
+    void append (const juce::String& line);
+    void flush();
+    void clear();
+
+    bool keyPressed (const juce::KeyPress& key) override;
+
+private:
+    int getNumRows() override { return (int) lines.size(); }
+    void paintListBoxItem (int row, juce::Graphics& g, int width, int height, bool rowIsSelected) override;
+
+    static constexpr int maxLines = 2000;
+
+    std::deque<juce::String> lines;
+    juce::StringArray pending;
+    juce::Font font;
+};
+
 class MainComponent;
 
 // The native menu bar (File/Edit) that replaces the old in-window toolbar.
@@ -218,7 +247,7 @@ private:
 
     DisclosureButton logToggleButton { "Activity Log" };
     juce::TextButton logClearButton { "Clear" };
-    juce::TextEditor logBox;
+    LogView logBox;
     bool logVisible = true;
 
     // Section outline rectangles, computed in resized(), painted in paint().

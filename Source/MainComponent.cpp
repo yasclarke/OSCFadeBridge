@@ -469,6 +469,109 @@ void DisclosureButton::paintButton (juce::Graphics& g, bool isHighlighted, bool)
 }
 
 //==============================================================================
+LogView::LogView()
+    : font (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 13.0f, juce::Font::plain))
+{
+    setModel (this);
+    setRowHeight (17);
+    setMultipleSelectionEnabled (true);
+    setColour (juce::ListBox::backgroundColourId, findColour (juce::TextEditor::backgroundColourId));
+    setColour (juce::ListBox::outlineColourId, findColour (juce::TextEditor::outlineColourId));
+    setOutlineThickness (1);
+}
+
+void LogView::append (const juce::String& line)
+{
+    pending.add (line);
+}
+
+void LogView::flush()
+{
+    if (pending.isEmpty())
+        return;
+
+    // Only follow new lines if already at the bottom, so scrolling back to
+    // read something isn't yanked away by the next message.
+    auto* viewport = getViewport();
+    const bool wasAtEnd = viewport->getViewPositionY() + viewport->getViewHeight()
+                            >= viewport->getViewedComponent()->getHeight() - getRowHeight();
+
+    for (auto& line : pending)
+        lines.push_back (line);
+    pending.clearQuick();
+
+    // Drop the oldest lines, shifting the selection to stay on the same ones.
+    const int excess = (int) lines.size() - maxLines;
+    if (excess > 0)
+    {
+        lines.erase (lines.begin(), lines.begin() + excess);
+
+        juce::SparseSet<int> shifted;
+        const auto selected = getSelectedRows();
+        for (int i = 0; i < selected.getNumRanges(); ++i)
+        {
+            const auto range = selected.getRange (i).movedToStartAt (selected.getRange (i).getStart() - excess)
+                                                     .getIntersectionWith ({ 0, (int) lines.size() });
+            if (! range.isEmpty())
+                shifted.addRange (range);
+        }
+        setSelectedRows (shifted, juce::dontSendNotification);
+    }
+
+    updateContent();
+    if (wasAtEnd)
+        scrollToEnsureRowIsOnscreen ((int) lines.size() - 1);
+    repaint();
+}
+
+void LogView::clear()
+{
+    lines.clear();
+    pending.clearQuick();
+    deselectAllRows();
+    updateContent();
+    repaint();
+}
+
+bool LogView::keyPressed (const juce::KeyPress& key)
+{
+    const auto cmd = juce::ModifierKeys::commandModifier;
+
+    if (key == juce::KeyPress ('a', juce::ModifierKeys (cmd), 0))
+    {
+        selectRangeOfRows (0, (int) lines.size() - 1, true);
+        return true;
+    }
+    if (key == juce::KeyPress ('c', juce::ModifierKeys (cmd), 0))
+    {
+        juce::StringArray selectedLines;
+        const auto selected = getSelectedRows();
+        for (int i = 0; i < selected.size(); ++i)
+            if (juce::isPositiveAndBelow (selected[i], (int) lines.size()))
+                selectedLines.add (lines[(size_t) selected[i]]);
+
+        if (! selectedLines.isEmpty())
+            juce::SystemClipboard::copyTextToClipboard (selectedLines.joinIntoString (juce::newLine) + juce::newLine);
+        return true;
+    }
+
+    return juce::ListBox::keyPressed (key);
+}
+
+void LogView::paintListBoxItem (int row, juce::Graphics& g, int width, int height, bool rowIsSelected)
+{
+    if (! juce::isPositiveAndBelow (row, (int) lines.size()))
+        return;
+
+    if (rowIsSelected)
+        g.fillAll (findColour (juce::TextEditor::highlightColourId));
+
+    g.setColour (findColour (juce::TextEditor::textColourId));
+    g.setFont (font);
+    g.drawText (lines[(size_t) row], 4, 0, width - 8, height, juce::Justification::centredLeft, false);
+}
+
+//==============================================================================
 MainComponent::MainComponent()
 {
     setWantsKeyboardFocus (true);
@@ -534,11 +637,6 @@ MainComponent::MainComponent()
     };
     logClearButton.onClick = [this] { logBox.clear(); };
 
-    logBox.setMultiLine (true);
-    logBox.setReadOnly (true);
-    logBox.setCaretVisible (false);
-    logBox.setScrollbarsShown (true);
-    logBox.setFont (juce::Font (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 13.0f, juce::Font::plain)));
     addAndMakeVisible (logBox);
 
     setSize (1060, 820);
@@ -560,6 +658,7 @@ MainComponent::~MainComponent()
 
 void MainComponent::timerCallback()
 {
+    logBox.flush();
     inputList.refreshRows();
     if (inspector != nullptr)
         inspector->refreshLiveDisplay();
@@ -810,11 +909,7 @@ void MainComponent::rebuildInspector()
 void MainComponent::appendLog (const juce::String& text)
 {
     const auto timestamp = juce::Time::getCurrentTime().toString (false, true, true, true);
-    logBox.moveCaretToEnd();
-    logBox.insertTextAtCaret ("[" + timestamp + "] " + text + juce::newLine);
-
-    if (logBox.getTotalNumChars() > 200000)
-        logBox.setText (logBox.getText().substring (100000), false);
+    logBox.append ("[" + timestamp + "] " + text);
 }
 
 void MainComponent::drawSection (juce::Graphics& g, juce::Rectangle<int> bounds, const juce::String& title)

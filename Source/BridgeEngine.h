@@ -148,6 +148,7 @@ public:
 
 private:
     void oscMessageReceived (const juce::OSCMessage& message) override;
+    void oscBundleReceived (const juce::OSCBundle& bundle) override;
     void handleIncomingMidiMessage (juce::MidiInput* source, const juce::MidiMessage& message) override;
     void handleAsyncUpdate() override;
     void timerCallback() override;

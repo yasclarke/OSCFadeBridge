@@ -758,6 +758,19 @@ void BridgeEngine::oscMessageReceived (const juce::OSCMessage& message)
     });
 }
 
+void BridgeEngine::oscBundleReceived (const juce::OSCBundle& bundle)
+{
+    // Bundled messages (e.g. several cues fired together) apply straight
+    // away - time tags are ignored, as for single messages.
+    for (auto& element : bundle)
+    {
+        if (element.isMessage())
+            oscMessageReceived (element.getMessage());
+        else if (element.isBundle())
+            oscBundleReceived (element.getBundle());
+    }
+}
+
 void BridgeEngine::handleIncomingMidiMessage (juce::MidiInput* source, const juce::MidiMessage& message)
 {
     if (! (message.isController() || message.isPitchWheel()))
@@ -865,9 +878,11 @@ bool BridgeEngine::applyInputValue (InputChannel& input, float x, double fadeSec
 {
     // Start from wherever the input actually is right now - mid-fade, that's
     // the fade's current position rather than its target - so a new value
-    // arriving during a fade carries on from there instead of jumping.
+    // arriving during a fade carries on from there instead of jumping. An
+    // input that has never had a value (e.g. just after launch) is taken to
+    // be at the bottom of its range, so its first fade still fades.
     const double now = juce::Time::getMillisecondCounterHiRes() / 1000.0;
-    float start = input.hasLiveValue ? input.liveValue : x;
+    float start = input.hasLiveValue ? input.liveValue : input.inMin;
     for (auto& f : activeFades)
         if (f.inputId == input.id)
             start = getFadePosition (f, now);
