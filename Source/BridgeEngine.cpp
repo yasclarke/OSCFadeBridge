@@ -2,6 +2,16 @@
 
 namespace
 {
+    // Fades are computed this often; each target's update rate then picks
+    // which of these ticks actually send.
+    constexpr int tickMilliseconds = 2;
+
+    // UDP has no delivery guarantee, so the settled value at the end of a
+    // fade (or after a jump) is sent once more this long afterwards.
+    constexpr double finalRepeatDelaySeconds = 0.1;
+
+    double nowSeconds() { return juce::Time::getMillisecondCounterHiRes() / 1000.0; }
+
     // Captures a before/after snapshot of the whole project and lets the
     // UndoManager flip between them - one class covers every mutation.
     class SnapshotAction : public juce::UndoableAction
@@ -92,7 +102,7 @@ BridgeEngine::BridgeEngine()
     restartOscSenders();
     restartMidiOutputs();
     restartMidiInputs();
-    restartTimer();
+    startTimer (tickMilliseconds);
 
     midiDeviceListConnection = juce::MidiDeviceListConnection::make ([this]
     {
@@ -525,7 +535,7 @@ void BridgeEngine::setValueManually (const juce::String& inputId, float value)
     if (auto* input = findInputById (inputId))
     {
         applyInputValue (*input, value, 0.0);
-        flushDirty();
+        serviceOutputs (nowSeconds());
     }
 }
 
@@ -631,7 +641,6 @@ void BridgeEngine::restoreSnapshot (const ProjectState& state)
     const bool receivePortChanged = newSettings.receivePort != settings.receivePort;
     const bool oscChanged         = ! sameConnections (newSettings, settings, TargetKind::osc);
     const bool midiChanged        = ! sameConnections (newSettings, settings, TargetKind::midi);
-    const bool freqChanged        = std::abs (newSettings.updateFrequencyHz - settings.updateFrequencyHz) > 1.0e-9;
 
     auto newMappings = state.mappings;
     auto newScalers = state.scalers;
@@ -646,6 +655,9 @@ void BridgeEngine::restoreSnapshot (const ProjectState& state)
                             [this] (const ActiveFade& f) { return findInputById (f.inputId) == nullptr; }),
                         activeFades.end());
 
+    for (auto it = sendStates.begin(); it != sendStates.end(); )
+        it = findMappingById (it->first) == nullptr ? sendStates.erase (it) : std::next (it);
+
     saveProject();
 
     if (receivePortChanged)
@@ -654,8 +666,6 @@ void BridgeEngine::restoreSnapshot (const ProjectState& state)
         restartOscSenders();
     if (midiChanged)
         restartMidiOutputs();
-    if (freqChanged)
-        restartTimer();
 
     if (onProjectChanged)
         onProjectChanged();
@@ -676,7 +686,6 @@ void BridgeEngine::newProject()
     restartReceiver();
     restartOscSenders();
     restartMidiOutputs();
-    restartTimer();
 
     if (onProjectChanged)
         onProjectChanged();
@@ -694,7 +703,6 @@ bool BridgeEngine::openProject (const juce::File& file)
     restartReceiver();
     restartOscSenders();
     restartMidiOutputs();
-    restartTimer();
 
     if (onProjectChanged)
         onProjectChanged();
@@ -752,7 +760,7 @@ void BridgeEngine::oscMessageReceived (const juce::OSCMessage& message)
 
         if (applyInputValue (input, x, (double) y))
         {
-            flushDirty();
+            serviceOutputs (nowSeconds());
             log ("Fade complete: " + describeResult (input));
         }
     });
@@ -833,7 +841,7 @@ void BridgeEngine::handleAsyncUpdate()
         applyInputValue (*input, value, input->midiFadeSeconds);
     }
 
-    flushDirty();
+    serviceOutputs (nowSeconds());
 }
 
 std::optional<float> BridgeEngine::decodeMidiValue (InputChannel& input, const juce::MidiMessage& message)
@@ -936,12 +944,6 @@ void BridgeEngine::timerCallback()
         finishMidiLearn (pendingLearn->device, spec);
     }
 
-    if (activeFades.empty())
-    {
-        flushDirty();
-        return;
-    }
-
     juce::StringArray completed;
 
     for (auto it = activeFades.begin(); it != activeFades.end(); )
@@ -967,7 +969,7 @@ void BridgeEngine::timerCallback()
         }
     }
 
-    flushDirty();
+    serviceOutputs (now);
 
     for (auto& id : completed)
         if (auto* input = findInputById (id))
@@ -982,21 +984,6 @@ void BridgeEngine::setLiveValue (InputChannel& input, float rawValue)
 
     input.liveValue = juce::jlimit (lo, hi, rawValue);
     input.hasLiveValue = true;
-    dirtyInputIds.addIfNotAlreadyThere (input.id);
-}
-
-void BridgeEngine::flushDirty()
-{
-    // A changed scaler means re-sending every mapping it scales.
-    for (auto& m : mappings)
-        if (m.scaledById.isNotEmpty() && dirtyInputIds.contains (m.scaledById))
-            dirtyInputIds.addIfNotAlreadyThere (m.id);
-
-    for (auto& m : mappings)
-        if (m.hasLiveValue && dirtyInputIds.contains (m.id))
-            sendOutputs (m);
-
-    dirtyInputIds.clearQuick();
 }
 
 float BridgeEngine::getOutputValue (const Mapping& m, const OutputTarget& out) const
@@ -1006,10 +993,87 @@ float BridgeEngine::getOutputValue (const Mapping& m, const OutputTarget& out) c
     return juce::jmap (applyCurve (out.curve, normalised, out.outMin, out.outMax), out.outMin, out.outMax);
 }
 
-void BridgeEngine::sendOutputs (const Mapping& m)
+bool BridgeEngine::isFading (const Mapping& m) const
 {
-    for (auto& out : m.outputs)
-        sendToOutput (out, getOutputValue (m, out));
+    return std::any_of (activeFades.begin(), activeFades.end(), [&] (const ActiveFade& f)
+    {
+        return f.inputId == m.id || (m.scaledById.isNotEmpty() && f.inputId == m.scaledById);
+    });
+}
+
+void BridgeEngine::serviceOutputs (double now)
+{
+    // Called every tick, and straight after a value jumps. For each output:
+    //  - Mid-fade, a value is only sent once it has moved on to another of
+    //    the output's resolution steps, and changed from what was last sent.
+    //  - Settled values (fade finished, or a jump) are sent exactly, and
+    //    once more finalRepeatDelaySeconds later in case a packet was lost.
+    //  - Each output sends at most at its target's update rate. An output
+    //    that has been at rest for a whole period sends straight away, so
+    //    jumps and the start of a fade don't wait; otherwise it waits for
+    //    its own slot in the period. The slots of a target's outputs are spread evenly across
+    //    the period, so the desk gets a steady trickle rather than a burst
+    //    of every output at once.
+    std::map<juce::String, int> outputsPerTarget, ordinalInTarget;
+    for (auto& m : mappings)
+        for (auto& out : m.outputs)
+            ++outputsPerTarget[out.targetId];
+
+    for (auto& m : mappings)
+    {
+        auto& states = sendStates[m.id];
+        states.resize (m.outputs.size());
+        const bool settled = ! isFading (m);
+        const float normalised = juce::jlimit (0.0f, 1.0f, m.getNormalisedValue() * getScaleFactor (m));
+
+        for (size_t i = 0; i < m.outputs.size(); ++i)
+        {
+            const auto& out = m.outputs[i];
+            auto* target = settings.findTarget (out.targetId);
+            const int ordinal = ordinalInTarget[out.targetId]++;
+            if (target == nullptr || ! m.hasLiveValue)
+                continue;
+
+            auto& state = states[i];
+            const float value = getOutputValue (m, out);
+            const double asSent = target->kind == TargetKind::midi
+                                    ? (double) juce::roundToInt (juce::jlimit (0.0f, out.midi.maxValue(), value))
+                                    : (out.sendAsInt ? (double) juce::roundToInt (value) : (double) value);
+            const int step = juce::roundToInt (normalised * (float) (juce::jmax (OutputTarget::minResolution, out.resolution) - 1));
+            const bool valueChanged = ! juce::exactlyEqual (asSent, state.lastValue);
+
+            const bool wantsToSend = ! state.hasSent
+                                       || (settled ? valueChanged : valueChanged && step != state.lastStep);
+
+            if (! wantsToSend)
+            {
+                // In its slot, so repeats are spread out like everything else.
+                if (settled && state.repeatAt >= 0.0 && now >= state.repeatAt && now >= state.nextSlotTime)
+                {
+                    sendToOutput (out, value);
+                    state.repeatAt = -1.0;
+                }
+                continue;
+            }
+
+            const double period = 1.0 / juce::jlimit (SendTarget::minUpdateHz, SendTarget::maxUpdateHz, target->updateFrequencyHz);
+            const bool atRest = state.lastWasSettled && now - state.lastSendTime >= period;
+            if (! atRest && now < state.nextSlotTime)
+                continue;
+
+            sendToOutput (out, value);
+            state.hasSent = true;
+            state.lastValue = asSent;
+            state.lastStep = step;
+            state.lastSendTime = now;
+            state.lastWasSettled = settled;
+            state.repeatAt = now + finalRepeatDelaySeconds;
+
+            // The first of this output's slots at least half a period away.
+            const double phase = period * ordinal / juce::jmax (1, outputsPerTarget[out.targetId]);
+            state.nextSlotTime = phase + std::ceil ((now + period * 0.5 - phase) / period) * period;
+        }
+    }
 }
 
 void BridgeEngine::sendToOutput (const OutputTarget& out, float value)
@@ -1120,6 +1184,7 @@ void BridgeEngine::restartReceiver()
 void BridgeEngine::restartOscSenders()
 {
     oscSenders.clear();
+    sendStates.clear();   // so whatever is now connected gets the current values
 
     for (auto& t : settings.targets)
     {
@@ -1142,6 +1207,7 @@ void BridgeEngine::restartOscSenders()
 void BridgeEngine::restartMidiOutputs()
 {
     midiOutputs.clear();
+    sendStates.clear();   // so whatever is now connected gets the current values
     const auto available = juce::MidiOutput::getAvailableDevices();
 
     for (auto& t : settings.targets)
@@ -1182,13 +1248,6 @@ void BridgeEngine::restartMidiInputs()
             input->start();
             midiInputs.push_back (std::move (input));
         }
-}
-
-void BridgeEngine::restartTimer()
-{
-    stopTimer();
-    const double hz = juce::jmax (1.0, settings.updateFrequencyHz);
-    startTimer ((int) juce::jmax (1.0, std::round (1000.0 / hz)));
 }
 
 void BridgeEngine::log (const juce::String& text)

@@ -5,8 +5,8 @@
 
 // One entry in a mapping's output list, on two lines: send target, then
 // either an OSC address or a MIDI message (type/channel/number) depending on
-// the target's kind, and a remove button; below that the curve, output
-// range, OSC value type and current value.
+// the target's kind, the resolution in steps, and a remove button; below
+// that the curve, output range, OSC value type and current value.
 class OutputRowComponent : public juce::Component
 {
 public:
@@ -28,7 +28,7 @@ public:
 
     // Column layout shared with the header labels above the rows.
     static constexpr int targetWidth = 130, rangeWidth = 64, valueWidth = 64, removeWidth = 24, intWidth = 34,
-                         curveWidth = 120, captionWidth = 44, gap = 4;
+                         curveWidth = 120, captionWidth = 44, stepsWidth = 64, gap = 4;
     static constexpr int lineHeight = 26, lineGap = 4, bottomPadding = 8;
     static constexpr int preferredHeight = lineHeight * 2 + lineGap + bottomPadding;
 
@@ -47,6 +47,8 @@ private:
     juce::ComboBox midiTypeBox;
     juce::ComboBox channelBox;
     juce::TextEditor numberEditor;
+    juce::Label stepsCaption { {}, "Steps" };
+    juce::TextEditor resolutionEditor;
     juce::Label curveCaption { {}, "Curve" };
     juce::ComboBox curveBox;
     juce::Label rangeCaption { {}, "Range" };

@@ -85,14 +85,21 @@ OutputRowComponent::OutputRowComponent (BridgeEngine& engineToUse, juce::String 
     intButton.setTooltip ("Value type sent: Flt = float (OSC type tag f), Int = rounded integer (type tag i) - "
                           "click to switch. Desks such as the Yamaha DM3 need Int");
     intButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff3a7bd5));
+    resolutionEditor.setInputRestrictions (5, "0123456789");
+    const auto stepsTooltip = "Resolution: the output's travel is divided into this many steps, and during a fade a new value "
+                              "is only sent once it reaches another step - fewer steps, fewer messages to the desk. "
+                              "The end of a fade is always sent exactly. ("
+                              + juce::String (OutputTarget::minResolution) + "-" + juce::String (OutputTarget::maxResolution) + ")";
+    resolutionEditor.setTooltip (stepsTooltip);
+    stepsCaption.setTooltip (stepsTooltip);
 
     for (auto* c : std::initializer_list<juce::Component*> { &targetBox, &addressEditor, &intButton, &midiTypeBox, &channelBox,
-                                                              &numberEditor, &curveCaption, &curveBox, &rangeCaption,
+                                                              &numberEditor, &stepsCaption, &resolutionEditor, &curveCaption, &curveBox, &rangeCaption,
                                                               &minEditor, &maxEditor, &valueLabel,
                                                               &removeButton })
         addAndMakeVisible (c);
 
-    for (auto* caption : { &curveCaption, &rangeCaption })
+    for (auto* caption : { &stepsCaption, &curveCaption, &rangeCaption })
     {
         styleCaption (*caption);
         caption->setJustificationType (juce::Justification::centredRight);
@@ -175,7 +182,7 @@ OutputRowComponent::OutputRowComponent (BridgeEngine& engineToUse, juce::String 
         });
     };
 
-    for (auto* editor : { &addressEditor, &numberEditor, &minEditor, &maxEditor })
+    for (auto* editor : { &addressEditor, &numberEditor, &resolutionEditor, &minEditor, &maxEditor })
     {
         editor->onFocusLost = [this] { commitFields(); };
         editor->onReturnKey = [this] { commitFields(); };
@@ -205,6 +212,7 @@ void OutputRowComponent::commitFields()
     const int number = numberEditor.getText().getIntValue();
     const auto outMin = (float) minEditor.getText().getDoubleValue();
     const auto outMax = (float) maxEditor.getText().getDoubleValue();
+    const int resolution = resolutionEditor.getText().getIntValue();
 
     engine.updateMapping (mappingId, [&] (Mapping& m)
     {
@@ -219,6 +227,8 @@ void OutputRowComponent::commitFields()
         o.midi.number = clampMidiNumber (o.midi.type, number);
         o.outMin = outMin;
         o.outMax = outMax;
+        if (resolution > 0)
+            o.resolution = juce::jlimit (OutputTarget::minResolution, OutputTarget::maxResolution, resolution);
     });
 }
 
@@ -251,6 +261,7 @@ void OutputRowComponent::refreshFromEngine()
     numberEditor.setText (juce::String (out->midi.number), false);
     minEditor.setText (juce::String (out->outMin), false);
     maxEditor.setText (juce::String (out->outMax), false);
+    resolutionEditor.setText (juce::String (out->resolution), false);
 
     intButton.setToggleState (out->sendAsInt, juce::dontSendNotification);
     for (int n = 0; n < juce::numElementsInArray (outputCurves); ++n)
@@ -336,6 +347,10 @@ void OutputRowComponent::resized()
     line1.removeFromLeft (gap);
     removeButton.setBounds (line1.removeFromRight (removeWidth));
     line1.removeFromRight (gap);
+    resolutionEditor.setBounds (line1.removeFromRight (stepsWidth));
+    line1.removeFromRight (gap);
+    stepsCaption.setBounds (line1.removeFromRight (captionWidth));
+    line1.removeFromRight (gap * 2);
 
     addressEditor.setBounds (line1);
 

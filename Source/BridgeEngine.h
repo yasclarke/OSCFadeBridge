@@ -34,6 +34,9 @@ struct ProjectState
 // send targets (an OSC host:port or a MIDI output port). Scalers are
 // inputs with no outputs that multiply the mappings scaled by them.
 //
+// Fades are computed on a fast internal tick, but sending is paced per
+// target to go easy on the receiving desk - see serviceOutputs().
+//
 // All mutations go through an undo/redo stack, and the whole project can
 // be saved to, or loaded from, an arbitrary file - see newProject()/
 // openProject()/saveProjectAs().
@@ -165,11 +168,11 @@ private:
     void finishMidiLearn (const juce::String& device, const MidiSpec& spec);
 
     // Starts a fade (or, for fadeSeconds <= 0, jumps) to x. Returns true if
-    // the value was applied immediately. Call flushDirty() afterwards to send.
+    // the value was applied immediately. Call serviceOutputs() afterwards to send.
     bool applyInputValue (InputChannel& input, float x, double fadeSeconds);
     void setLiveValue (InputChannel& input, float rawValue);
-    void flushDirty();
-    void sendOutputs (const Mapping& m);
+    void serviceOutputs (double now);
+    bool isFading (const Mapping& m) const;
     void sendToOutput (const OutputTarget& out, float value);
     juce::String describeResult (const InputChannel& input) const;
 
@@ -177,7 +180,6 @@ private:
     void restartOscSenders();
     void restartMidiOutputs();
     void restartMidiInputs();
-    void restartTimer();
     void log (const juce::String& text);
 
     ProjectState captureState() const;
@@ -192,7 +194,20 @@ private:
     std::vector<Mapping> mappings;
     std::vector<Scaler> scalers;
     std::vector<ActiveFade> activeFades;
-    juce::StringArray dirtyInputIds;
+
+    // What each output last sent, and when it may next send. By mapping id,
+    // then output index.
+    struct OutputSendState
+    {
+        bool hasSent = false;
+        double lastValue = 0.0;        // as sent: rounded for Int and MIDI outputs
+        int lastStep = -1;             // which of the output's resolution steps that was
+        double lastSendTime = -1.0e9;
+        bool lastWasSettled = true;    // whether that was a settled value rather than mid-fade
+        double nextSlotTime = 0.0;     // earliest time a mid-fade update may go
+        double repeatAt = -1.0;        // when to resend a settled value once more (-1 = none)
+    };
+    std::map<juce::String, std::vector<OutputSendState>> sendStates;
     juce::StringArray reportedInvalidAddresses;   // logged once each, not on every fade tick
     juce::File currentProjectFile;
     juce::UndoManager undoManager;

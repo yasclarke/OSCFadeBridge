@@ -25,13 +25,17 @@ TargetRowComponent::TargetRowComponent (BridgeEngine& engineToUse, juce::String 
     kindBox.addItem ("MIDI", 2);
 
     for (auto* c : std::initializer_list<juce::Component*> { &nameEditor, &kindBox, &hostEditor, &portEditor,
-                                                              &deviceBox, &removeButton })
+                                                              &deviceBox, &rateEditor, &removeButton })
         addAndMakeVisible (c);
 
     portEditor.setInputRestrictions (5, "0123456789");
+    rateEditor.setInputRestrictions (6, "0123456789.");
+    rateEditor.setTooltip ("Most updates per second each output sends to this target during a fade ("
+                           + juce::String (SendTarget::minUpdateHz) + "-" + juce::String (SendTarget::maxUpdateHz)
+                           + "). Lower it if the desk struggles - its outputs' sends are also spread across each period");
     deviceBox.setTextWhenNothingSelected ("Choose MIDI output...");
 
-    for (auto* editor : { &nameEditor, &hostEditor, &portEditor })
+    for (auto* editor : { &nameEditor, &hostEditor, &portEditor, &rateEditor })
     {
         editor->onFocusLost = [this] { commit(); };
         editor->onReturnKey = [this] { commit(); };
@@ -61,6 +65,7 @@ void TargetRowComponent::refreshFromEngine()
     kindBox.setSelectedId (isMidi ? 2 : 1, juce::dontSendNotification);
     hostEditor.setText (t->host, false);
     portEditor.setText (juce::String (t->port), false);
+    rateEditor.setText (juce::String (t->updateFrequencyHz), false);
 
     deviceChoices = engine.getMidiOutputDeviceNames();
     const bool deviceMissing = t->midiDevice.isNotEmpty() && ! deviceChoices.contains (t->midiDevice);
@@ -91,6 +96,7 @@ void TargetRowComponent::commit()
     const auto name = nameEditor.getText().trim();
     const auto host = hostEditor.getText().trim();
     const int port = portEditor.getText().getIntValue();
+    const double rate = rateEditor.getText().getDoubleValue();
     const bool isMidi = kindBox.getSelectedId() == 2;
     const int deviceIndex = deviceBox.getSelectedId() - 2;
     const auto device = juce::isPositiveAndBelow (deviceIndex, deviceChoices.size()) ? deviceChoices[deviceIndex]
@@ -104,6 +110,8 @@ void TargetRowComponent::commit()
             t.host = host;
         if (port > 0 && port <= 65535)
             t.port = port;
+        if (rate > 0.0)
+            t.updateFrequencyHz = juce::jlimit (SendTarget::minUpdateHz, SendTarget::maxUpdateHz, rate);
         t.kind = isMidi ? TargetKind::midi : TargetKind::osc;
         if (device.isNotEmpty())
             t.midiDevice = device;
@@ -135,6 +143,9 @@ void TargetRowComponent::resized()
     removeButton.setBounds (area.removeFromRight (removeWidth));
     area.removeFromRight (gap);
 
+    // The rate lines up after the port, with MIDI devices taking host + port's width.
+    rateEditor.setBounds (area.getX() + hostWidth + gap + portWidth + gap, area.getY(), rateWidth, area.getHeight());
+
     deviceBox.setBounds (area.withWidth (juce::jmin (area.getWidth(), hostWidth + gap + portWidth)));
     hostEditor.setBounds (area.removeFromLeft (hostWidth));
     area.removeFromLeft (gap);
@@ -145,7 +156,7 @@ void TargetRowComponent::resized()
 GlobalSettingsComponent::GlobalSettingsComponent (BridgeEngine& engineToUse)
     : engine (engineToUse)
 {
-    for (auto* label : { &receivePortLabel, &updateHzLabel, &defaultFadeLabel, &nameHeader, &kindHeader, &destinationHeader, &portHeader })
+    for (auto* label : { &receivePortLabel, &defaultFadeLabel, &nameHeader, &kindHeader, &destinationHeader, &portHeader, &rateHeader })
     {
         styleCaption (*label);
         addAndMakeVisible (label);
@@ -161,7 +172,7 @@ GlobalSettingsComponent::GlobalSettingsComponent (BridgeEngine& engineToUse)
     defaultFadeEditor.setInputRestrictions (8, "0123456789.");
     defaultFadeEditor.setTooltip ("Fade time used when an OSC input arrives with just a value and no fade time");
 
-    for (auto* editor : { &receivePortEditor, &updateHzEditor, &defaultFadeEditor })
+    for (auto* editor : { &receivePortEditor, &defaultFadeEditor })
     {
         addAndMakeVisible (editor);
         editor->onFocusLost = [this] { applyClicked(); };
@@ -183,7 +194,6 @@ void GlobalSettingsComponent::refreshFromEngine()
 {
     const auto& s = engine.getSettings();
     receivePortEditor.setText (juce::String (s.receivePort), false);
-    updateHzEditor.setText (juce::String (s.updateFrequencyHz), false);
     defaultFadeEditor.setText (juce::String (s.defaultFadeSeconds), false);
 
     if (computeRowSignature() != rowSignature)
@@ -222,7 +232,6 @@ void GlobalSettingsComponent::applyClicked()
 
     if (receivePort > 0 && receivePort <= 65535)
         s.receivePort = receivePort;
-    s.updateFrequencyHz = juce::jmax (1.0, updateHzEditor.getText().getDoubleValue());
     s.defaultFadeSeconds = juce::jmax (0.0, defaultFadeEditor.getText().getDoubleValue());
 
     engine.setSettings (s);
@@ -251,7 +260,6 @@ void GlobalSettingsComponent::resized()
     {
         auto row = area.removeFromTop (topRowHeight);
         layoutField (row, receivePortLabel, receivePortEditor, 100);
-        layoutField (row, updateHzLabel, updateHzEditor, 130);
         layoutField (row, defaultFadeLabel, defaultFadeEditor, 130);
     }
 
@@ -276,6 +284,8 @@ void GlobalSettingsComponent::resized()
         destinationHeader.setBounds (row.removeFromLeft (R::hostWidth));
         row.removeFromLeft (R::gap);
         portHeader.setBounds (row.removeFromLeft (R::portWidth));
+        row.removeFromLeft (R::gap);
+        rateHeader.setBounds (row.removeFromLeft (R::rateWidth));
     }
 
     area.removeFromTop (2);

@@ -2,7 +2,7 @@
 
 A small macOS app that bridges QLab (or anything else that speaks OSC) to an OSC-controlled mixing desk, handling fades in between.
 
-It listens for OSC messages on custom addresses carrying `[x, y]` — a destination value and a fade time in seconds, or just `[x]` to use the default fade time (1 s unless changed in Settings) — or for MIDI messages, and ramps from the last value it received to the new one over that duration, sending updates at a configurable rate to one or more mapped, independently-scaled OSC or MIDI outputs.
+It listens for OSC messages on custom addresses carrying `[x, y]` — a destination value and a fade time in seconds, or just `[x]` to use the default fade time (1 s unless changed in Settings) — or for MIDI messages, and ramps from the input's current position to the new value over that duration (an input that hasn't had a value yet starts from the bottom of its range), sending updates to one or more mapped, independently-scaled OSC or MIDI outputs.
 
 ## Features
 
@@ -14,7 +14,9 @@ It listens for OSC messages on custom addresses carrying `[x, y]` — a destinat
 - VCA-style scalers: inputs with no outputs of their own (OSC or MIDI). A mapping scaled by one has its normalised value multiplied by the scaler's, mapped onto a per-mapping range (e.g. 0.9–1 for a gentle trim). Scalers can be named
 - MIDI Learn: listen for the next CC or pitch bend (14-bit CC pairs detected automatically) to set an input's device, channel and message
 - Live values for every input and output, and drag-to-change (or double-click to type) values in the lists for testing
-- Configurable OSC receive port and update rate
+- Configurable OSC receive port
+- Desk-friendly sending: each send target has its own update rate, with its outputs' messages spread evenly across each period rather than sent in one burst. Each output has a resolution in steps (default 256), and only sends mid-fade when it moves to a new step, never repeating an unchanged value. The end of every fade is sent exactly, and repeated once 100 ms later in case a UDP packet was lost
+- OSC bundles are accepted as well as single messages
 - Undo/redo for every edit
 - Multiple named projects (New / Open / Save / Save As), each with its own mappings and settings. Projects from earlier versions load with their send host/port as a single target
 - Duplicate a mapping (button, right-click menu or Cmd+D) with all its outputs, and drag mappings and scalers to reorder them

@@ -4,7 +4,8 @@
 #include "BridgeEngine.h"
 
 // One send target: name, kind (OSC/MIDI), then host + port or MIDI
-// device, with a dot showing whether its connection is open.
+// device, and its update rate, with a dot showing whether its connection
+// is open.
 class TargetRowComponent : public juce::Component, public juce::SettableTooltipClient
 {
 public:
@@ -18,7 +19,7 @@ public:
 
     // Column layout shared with the header labels above the rows.
     static constexpr int statusWidth = 16, nameWidth = 150, kindWidth = 80, hostWidth = 180,
-                         portWidth = 80, removeWidth = 24, gap = 6;
+                         portWidth = 80, rateWidth = 70, removeWidth = 24, gap = 6;
 
 private:
     void commit();
@@ -31,12 +32,13 @@ private:
     juce::TextEditor hostEditor;
     juce::TextEditor portEditor;
     juce::ComboBox deviceBox;
+    juce::TextEditor rateEditor;
     juce::StringArray deviceChoices;   // deviceBox item id N+2 = deviceChoices[N]
     juce::TextButton removeButton { "x" };
 };
 
-// Editor for the receive port, the fade update frequency, and the list
-// of send targets that outputs can be routed to.
+// Editor for the receive port, the default fade time, and the list of
+// send targets that outputs can be routed to.
 class GlobalSettingsComponent : public juce::Component, private juce::AsyncUpdater
 {
 public:
@@ -66,9 +68,6 @@ private:
     juce::Label receivePortLabel { {}, "Receive Port" };
     juce::TextEditor receivePortEditor;
 
-    juce::Label updateHzLabel { {}, "Update Rate (Hz)" };
-    juce::TextEditor updateHzEditor;
-
     juce::Label defaultFadeLabel { {}, "Default Fade (s)" };
     juce::TextEditor defaultFadeEditor;
 
@@ -78,6 +77,7 @@ private:
     juce::Label kindHeader { {}, "Type" };
     juce::Label destinationHeader { {}, "Host / MIDI Device" };
     juce::Label portHeader { {}, "Port" };
+    juce::Label rateHeader { {}, "Rate (Hz)" };
 
     juce::OwnedArray<TargetRowComponent> rows;
     juce::String rowSignature;

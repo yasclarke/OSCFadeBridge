@@ -87,6 +87,9 @@ struct SendTarget
     juce::String host { "127.0.0.1" };
     int port = 9001;
     juce::String midiDevice;
+    double updateFrequencyHz = 30.0;   // how often each output to this target may send
+
+    static constexpr double minUpdateHz = 1.0, maxUpdateHz = 200.0;
 
     // True if both would open the same connection (name changes don't need a reconnect).
     bool sameConnectionAs (const SendTarget& other) const
@@ -104,10 +107,13 @@ struct SendTarget
         obj->setProperty ("host", host);
         obj->setProperty ("port", port);
         obj->setProperty ("midiDevice", midiDevice);
+        obj->setProperty ("updateFrequencyHz", updateFrequencyHz);
         return juce::var (obj);
     }
 
-    static SendTarget fromVar (const juce::var& v)
+    // defaultHz is for targets saved before each had its own rate - they
+    // take the project's old global rate.
+    static SendTarget fromVar (const juce::var& v, double defaultHz)
     {
         SendTarget t;
         t.id         = v.getProperty ("id", juce::Uuid().toString()).toString();
@@ -116,6 +122,7 @@ struct SendTarget
         t.host       = v.getProperty ("host", "127.0.0.1").toString();
         t.port       = (int) v.getProperty ("port", 9001);
         t.midiDevice = v.getProperty ("midiDevice", juce::String()).toString();
+        t.updateFrequencyHz = juce::jlimit (minUpdateHz, maxUpdateHz, (double) v.getProperty ("updateFrequencyHz", defaultHz));
         return t;
     }
 };
@@ -234,6 +241,13 @@ struct OutputTarget
     bool sendAsInt = false;                 // OSC only: round and send int32 instead of float32
     OutputCurve curve = OutputCurve::linear;
 
+    // How many steps the output's travel (input min to max, before the
+    // curve) is divided into: mid-fade, a new value is only sent once it
+    // has moved on to another step. Fewer steps means fewer messages. The
+    // end of a fade is always sent exactly.
+    int resolution = 256;
+    static constexpr int minResolution = 2, maxResolution = 65536;
+
     juce::var toVar() const
     {
         auto* obj = new juce::DynamicObject();
@@ -244,6 +258,7 @@ struct OutputTarget
         obj->setProperty ("outMax", (double) outMax);
         obj->setProperty ("sendAsInt", sendAsInt);
         obj->setProperty ("curve", curveToString (curve));
+        obj->setProperty ("resolution", resolution);
         return juce::var (obj);
     }
 
@@ -257,6 +272,7 @@ struct OutputTarget
         t.outMax   = (float) (double) v.getProperty ("outMax", 1.0);
         t.sendAsInt = (bool) v.getProperty ("sendAsInt", false);
         t.curve     = curveFromString (v.getProperty ("curve", "linear").toString());
+        t.resolution = juce::jlimit (minResolution, maxResolution, (int) v.getProperty ("resolution", 256));
         return t;
     }
 };
@@ -419,7 +435,6 @@ struct Mapping : InputChannel
 struct GlobalSettings
 {
     int receivePort = 9000;
-    double updateFrequencyHz = 30.0;
     double defaultFadeSeconds = 1.0;   // for OSC inputs that arrive with a value but no fade time
     std::vector<SendTarget> targets;
 
@@ -442,7 +457,6 @@ struct GlobalSettings
     {
         auto* obj = new juce::DynamicObject();
         obj->setProperty ("receivePort", receivePort);
-        obj->setProperty ("updateFrequencyHz", updateFrequencyHz);
         obj->setProperty ("defaultFadeSeconds", defaultFadeSeconds);
 
         juce::Array<juce::var> arr;
@@ -455,23 +469,26 @@ struct GlobalSettings
 
     // Projects saved before send targets existed have a single global
     // sendHost/sendPort instead - that becomes the one and only target.
+    // Projects from before targets had their own update rate had a single
+    // global one, which each target inherits.
     static GlobalSettings fromVar (const juce::var& v)
     {
         GlobalSettings s;
         s.receivePort       = (int) v.getProperty ("receivePort", 9000);
-        s.updateFrequencyHz = (double) v.getProperty ("updateFrequencyHz", 30.0);
         s.defaultFadeSeconds = (double) v.getProperty ("defaultFadeSeconds", 1.0);
+        const double legacyHz = (double) v.getProperty ("updateFrequencyHz", 30.0);
 
         if (auto* arr = v.getProperty ("targets", juce::var()).getArray())
         {
             for (auto& t : *arr)
-                s.targets.push_back (SendTarget::fromVar (t));
+                s.targets.push_back (SendTarget::fromVar (t, legacyHz));
         }
         else
         {
             SendTarget legacy;
             legacy.host = v.getProperty ("sendHost", "127.0.0.1").toString();
             legacy.port = (int) v.getProperty ("sendPort", 9001);
+            legacy.updateFrequencyHz = juce::jlimit (SendTarget::minUpdateHz, SendTarget::maxUpdateHz, legacyHz);
             s.targets.push_back (legacy);
         }
 
